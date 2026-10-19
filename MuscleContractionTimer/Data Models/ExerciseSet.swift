@@ -6,7 +6,28 @@
 //
 
 import Foundation
+import Combine
 
-struct ExerciseSet {
+enum ExerciseSetState: Int {
+    case notStarted, started, finished
+}
+
+class ExerciseSet: ObservableObject {
+    let id = UUID()
     
+    @Published var weight: Double
+    @Published var reps: Int
+    @Published var state: ExerciseSetState
+    
+    init(weight: Double, reps: Int, state: ExerciseSetState = .notStarted) {
+        self.weight = weight
+        self.reps = reps
+        self.state = state
+    }
+}
+
+extension ExerciseSet: Identifiable {
+    static func == (lhs: borrowing ExerciseSet, rhs: borrowing ExerciseSet) -> Bool {
+        lhs.id == rhs.id
+    }
 }
