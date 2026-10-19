@@ -12,10 +12,12 @@ class Constants {
 //        case
 //    }
     
-    static let strokeWidth: CGFloat = 2
+    static let strokeWidth: CGFloat = 1
     static let cardShadow: ShadowStyle = .drop(color: Color.shadow, radius: 5)
     
     class Radius {
+        static let max: CGFloat = 2048
+        
         static let xl: CGFloat = 32
         static let l: CGFloat = 24
         static let m: CGFloat = 16
