@@ -23,7 +23,7 @@ struct ExerciseView: View {
                 }
                 
                 VStack(spacing: Constants.Padding.s) {
-                    ForEach(viewModel.sets.enumerated(), id: \.0) { index, set in
+                    ForEach(viewModel.sets.enumerated(), id: \.element.id) { index, set in
                         
                         ExerciseSetView(index, set) {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {

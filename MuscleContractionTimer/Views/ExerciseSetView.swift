@@ -114,11 +114,7 @@ struct ExerciseSetView: View {
     private var exerciseSetDetails: some View {
         HStack(spacing: pageSpacing) {
             Button {
-                if swipePage == .inputs {
-                    snapToPage(.contractionTimings, animated: true)
-                } else {
-                    snapToPage(.inputs, animated: true)
-                }
+                // ignoring the set type for simplicity
             } label: {
                 Text("\(index + 1)")
                     .font(Fonts.headline)

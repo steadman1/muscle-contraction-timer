@@ -32,6 +32,8 @@ public struct ContentView: View {
                 ExerciseView(viewModel: exerciseViewModel)
                     .padding(Constants.Padding.m)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.background)
             .tabItem {
                 Label("Workout", systemImage: "dumbbell.fill")
             }
