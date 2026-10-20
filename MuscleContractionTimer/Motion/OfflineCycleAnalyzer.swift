@@ -12,26 +12,28 @@ public struct AnalyzerConfiguration: Sendable {
     public var targetSampleRateHz: Double
     public var highPassCutoffHz: Double
     public var lowPassCutoffHz: Double
-    public var stillnessVelocityThreshold: Double
+    /// Fraction of ROM above the resting trough that defines repetition start/end departure (default 0.03 = 3%)
     public var crestDepartureRatio: Double
+    /// Fraction of recording start/end penalized against pre/post-set handling artifacts (default 0.12 = 12%)
+    public var edgeExclusionRatio: Double
     
     public static func preset(for source: SensorSource) -> AnalyzerConfiguration {
         switch source {
         case .iPhone:
             return AnalyzerConfiguration(
                 targetSampleRateHz: 100.0,
-                highPassCutoffHz: 0.12,
-                lowPassCutoffHz: 6.0,
-                stillnessVelocityThreshold: 0.12, // Fraction of stroke peak velocity considered stationary
-                crestDepartureRatio: 0.04         // 4% of ROM departure threshold
+                highPassCutoffHz: 0.10,
+                lowPassCutoffHz: 5.5,
+                crestDepartureRatio: 0.03,
+                edgeExclusionRatio: 0.12
             )
         case .airPods:
             return AnalyzerConfiguration(
                 targetSampleRateHz: 50.0,
-                highPassCutoffHz: 0.10,
-                lowPassCutoffHz: 4.0,
-                stillnessVelocityThreshold: 0.12,
-                crestDepartureRatio: 0.04
+                highPassCutoffHz: 0.08,
+                lowPassCutoffHz: 3.8,
+                crestDepartureRatio: 0.03,
+                edgeExclusionRatio: 0.12
             )
         }
     }
@@ -77,13 +79,13 @@ public enum OfflineCycleAnalyzer {
             )
         }
         
-        // 1. PCA Principal Axis
+        // 1. Core-Window PCA (computed over middle 70% to ignore pre/post-set handling motion)
         let worldVectors = resampled.map(\.acc)
         let pca = SignalProcessing.computePrincipalAxis(worldVectors)
         let principalAxis = pca.axis
         let rawProjectedAcc = worldVectors.map { simd_dot($0, principalAxis) }
         
-        // 2. Bandpass filter acceleration (with reflected endpoint padding to prevent edge transients)
+        // 2. Bandpass filter acceleration
         let denoisedAcc = SignalProcessing.zeroPhaseButterworth(
             signal: rawProjectedAcc,
             cutoffHz: config.lowPassCutoffHz,
@@ -97,36 +99,37 @@ public enum OfflineCycleAnalyzer {
             type: .highpass
         )
         
-        // 3. Adaptive moving-baseline window based on average expected rep duration
+        // 3. Adaptive moving-baseline detrending window
         let totalDuration = resampled.last!.time - resampled.first!.time
-        let expectedRepDuration = max(1.5, totalDuration / Double(max(1, targetRepCount)))
-        let detrendWindowSamples = max(Int(expectedRepDuration * 1.6 * config.targetSampleRateHz), Int(2.5 * config.targetSampleRateHz))
+        let expectedRepDuration = max(1.4, totalDuration / Double(max(1, targetRepCount + 1)))
+        let detrendWindowSamples = max(
+            Int(expectedRepDuration * 1.5 * config.targetSampleRateHz),
+            Int(2.2 * config.targetSampleRateHz)
+        )
         
-        // 4. Integrate acceleration -> velocity & detrend
+        // 4. Integrate acceleration -> velocity -> displacement
         let rawVelocity = SignalProcessing.cumulativeTrapezoid(signal: zeroMeanAcc, dt: dt)
         let unorientedVelocity = SignalProcessing.detrendMovingBaseline(
             signal: rawVelocity,
             windowSamples: detrendWindowSamples
         )
         
-        // 5. Integrate velocity -> displacement & detrend
         let rawDisplacement = SignalProcessing.cumulativeTrapezoid(signal: unorientedVelocity, dt: dt)
         let unorientedDisplacement = SignalProcessing.detrendMovingBaseline(
             signal: rawDisplacement,
             windowSamples: detrendWindowSamples
         )
         
-        // 6. Calibrate sign convention so Resting Baseline = Bottom Trough and Active Excursion = Positive Peak
+        // 5. Orient displacement so Stationary Rest Baseline = Bottom Trough and Rep Excursion = Positive Peak
         let cleanDisplacement = SignalProcessing.orientExcursionPositive(
             displacement: unorientedDisplacement,
             velocity: unorientedVelocity
         )
-        // Keep velocity sign consistent with oriented displacement
         let isFlipped = zip(unorientedDisplacement, cleanDisplacement).contains { $0.0 * $0.1 < 0 }
         let cleanVelocity = isFlipped ? unorientedVelocity.map { -$0 } : unorientedVelocity
         let orientedAcc = isFlipped ? zeroMeanAcc.map { -$0 } : zeroMeanAcc
         
-        // 7. Build KinematicSample array
+        // 6. Build KinematicSample array
         var samples: [KinematicSample] = []
         samples.reserveCapacity(n)
         for i in 0..<n {
@@ -142,13 +145,12 @@ public enum OfflineCycleAnalyzer {
             )
         }
         
-        // 8. Select the exact K Excursion Peaks and segment their [Start -> Iso -> End] boundaries
+        // 7. Segment into K repetitions prioritizing the central cadence cluster
         let cycles = segmentKRepetitions(
             targetK: targetRepCount,
             samples: samples,
             displacements: cleanDisplacement,
             velocities: cleanVelocity,
-            accelerations: orientedAcc,
             expectedRepDuration: expectedRepDuration,
             config: config
         )
@@ -163,12 +165,13 @@ public enum OfflineCycleAnalyzer {
         )
     }
     
-    // MARK: - Peak-Anchored K-Repetition Segmentation
+    // MARK: - Central Cadence Cluster K-Peak Selection
     
     private struct CandidatePeak {
         let index: Int
         let height: Double
-        let prominence: Double
+        let rawProminence: Double
+        let weightedProminence: Double
     }
     
     private static func segmentKRepetitions(
@@ -176,20 +179,17 @@ public enum OfflineCycleAnalyzer {
         samples: [KinematicSample],
         displacements: [Double],
         velocities: [Double],
-        accelerations: [Double],
         expectedRepDuration: TimeInterval,
         config: AnalyzerConfiguration
     ) -> [DetectedCycle] {
         let n = displacements.count
         guard n > 10 else { return [] }
         
-        // Minimum distance between two distinct repetition turnaround peaks:
-        // At least 40% of the average rep duration (or 0.65s minimum) so a double-bump at the bottom
-        // of an isometric pause is merged into a single rep rather than counted as two reps.
-        let minPeakSpacingSec = max(0.65, expectedRepDuration * 0.42)
+        // Minimum spacing between distinct rep turnaround peaks (at least 0.65s or 38% of expected rep duration)
+        let minPeakSpacingSec = max(0.65, expectedRepDuration * 0.38)
         let minPeakDistSamples = max(5, Int(minPeakSpacingSec * config.targetSampleRateHz))
         
-        // 1. Find all local maxima in `displacements`
+        // 1. Collect all local maxima
         var rawMaxima: [Int] = []
         for i in 2..<(n - 2) {
             let v = displacements[i]
@@ -199,10 +199,9 @@ public enum OfflineCycleAnalyzer {
                 rawMaxima.append(i)
             }
         }
-        
         guard !rawMaxima.isEmpty else { return [] }
         
-        // 2. Merge local maxima that are closer than `minPeakDistSamples` (keep the higher peak)
+        // 2. Merge local maxima that occur within `minPeakDistSamples` (keep higher peak)
         var mergedMaxima: [Int] = []
         for idx in rawMaxima {
             if let last = mergedMaxima.last, (idx - last) < minPeakDistSamples {
@@ -214,78 +213,139 @@ public enum OfflineCycleAnalyzer {
             }
         }
         
-        // 3. Score each candidate peak by its prominence above surrounding valleys
+        // 3. Compute prominence and apply Tukey edge taper to suppress pre/post-set handling spikes
         let valleyWindow = max(minPeakDistSamples, Int(expectedRepDuration * config.targetSampleRateHz))
         var candidates: [CandidatePeak] = []
+        
         for pkIdx in mergedMaxima {
             let leftLo = max(0, pkIdx - valleyWindow)
             let rightHi = min(n - 1, pkIdx + valleyWindow)
             let leftMin = displacements[leftLo...pkIdx].min() ?? displacements[pkIdx]
             let rightMin = displacements[pkIdx...rightHi].min() ?? displacements[pkIdx]
-            let prominence = (displacements[pkIdx] - leftMin) + (displacements[pkIdx] - rightMin)
-            candidates.append(CandidatePeak(index: pkIdx, height: displacements[pkIdx], prominence: prominence))
+            
+            let rawProm = (displacements[pkIdx] - leftMin) + (displacements[pkIdx] - rightMin)
+            let u = Double(pkIdx) / Double(max(1, n - 1))
+            let centerWeight = SignalProcessing.centralWindowWeight(
+                normalizedPosition: u,
+                edgeFraction: config.edgeExclusionRatio
+            )
+            
+            candidates.append(
+                CandidatePeak(
+                    index: pkIdx,
+                    height: displacements[pkIdx],
+                    rawProminence: rawProm,
+                    weightedProminence: rawProm * centerWeight
+                )
+            )
         }
         
-        // 4. Select top K peaks by prominence, then sort chronologically
-        let selectedPeaks = candidates
-            .sorted { $0.prominence > $1.prominence }
-            .prefix(targetK)
-            .sorted { $0.index < $1.index }
+        // 4. Filter out minor baseline noise ripples (< 20% of the median top-K prominence)
+        let sortedByProm = candidates.sorted { $0.weightedProminence > $1.weightedProminence }
+        let refCount = min(targetK, sortedByProm.count)
+        let medianTopProm = sortedByProm[refCount / 2].rawProminence
+        let viableCandidates = candidates.filter { $0.rawProminence >= medianTopProm * 0.22 }
+        
+        let selectedPeaks: [CandidatePeak]
+        if viableCandidates.count <= targetK {
+            selectedPeaks = sortedByProm.prefix(targetK).sorted { $0.index < $1.index }
+        } else {
+            // 5. Evaluate contiguous windows of K viable peaks [start ... start + K - 1]
+            // to select the central, uniformly-spaced repetition cluster and reject edge outliers
+            var bestWindowScore = -Double.infinity
+            var bestWindowStart = 0
+            
+            for start in 0...(viableCandidates.count - targetK) {
+                let slice = Array(viableCandidates[start..<(start + targetK)])
+                let meanWeightedProm = slice.map(\.weightedProminence).reduce(0, +) / Double(targetK)
+                
+                // Reward uniform ROM consistency across the K reps
+                let heights = slice.map(\.rawProminence)
+                let meanHeight = max(1e-6, heights.reduce(0, +) / Double(targetK))
+                let heightStd = sqrt(heights.reduce(0) { $0 + pow($1 - meanHeight, 2) } / Double(targetK))
+                let romConsistency = 1.0 / (1.0 + 0.5 * (heightStd / meanHeight))
+                
+                // Reward consistent cadence (inter-peak intervals)
+                var cadenceRegularity = 1.0
+                if slice.count >= 3 {
+                    var intervals: [Double] = []
+                    for j in 1..<slice.count {
+                        intervals.append(Double(slice[j].index - slice[j - 1].index))
+                    }
+                    let meanInt = max(1.0, intervals.reduce(0, +) / Double(intervals.count))
+                    let intStd = sqrt(intervals.reduce(0) { $0 + pow($1 - meanInt, 2) } / Double(intervals.count))
+                    cadenceRegularity = 1.0 / (1.0 + 0.6 * (intStd / meanInt))
+                }
+                
+                let score = meanWeightedProm * romConsistency * cadenceRegularity
+                if score > bestWindowScore {
+                    bestWindowScore = score
+                    bestWindowStart = start
+                }
+            }
+            selectedPeaks = Array(viableCandidates[bestWindowStart..<(bestWindowStart + targetK)])
+        }
         
         guard !selectedPeaks.isEmpty else { return [] }
         
-        // 5. For each turnaround peak, locate the bounding resting troughs [valleyLeft, valleyRight]
-        // and refine the exact Phase 1, Isometric, and Phase 2 boundaries
+        // 6. Partition each repetition around its turnaround peak [valleyLeft -> Peak -> valleyRight]
         var cycles: [DetectedCycle] = []
+        var previousRepEndIdx = 0
+        
         for (repNum, peak) in selectedPeaks.enumerated() {
             let pkIdx = peak.index
             
-            // Search window for the resting trough before this peak:
-            // Bounded by the previous rep's end (or up to 1.25x expectedRepDuration before the peak)
+            // Left search bound: never overlap the previous rep's end, and never reach past the previous peak
+            let maxLookback = Int(expectedRepDuration * 1.15 * config.targetSampleRateHz)
             let searchLeftBound: Int
             if repNum > 0 {
-                let prevPeakIdx = selectedPeaks[repNum - 1].index
-                // Start searching after the previous peak's descent finished
-                searchLeftBound = prevPeakIdx + max(2, (pkIdx - prevPeakIdx) / 4)
+                searchLeftBound = max(previousRepEndIdx, pkIdx - maxLookback)
             } else {
-                searchLeftBound = max(0, pkIdx - Int(expectedRepDuration * 1.3 * config.targetSampleRateHz))
+                searchLeftBound = max(0, pkIdx - maxLookback)
             }
             
-            // Search window for the resting trough after this peak:
+            // Right search bound: stop at or before the trough preceding the next peak
+            let maxLookahead = Int(expectedRepDuration * 1.15 * config.targetSampleRateHz)
             let searchRightBound: Int
             if repNum + 1 < selectedPeaks.count {
                 let nextPeakIdx = selectedPeaks[repNum + 1].index
-                // Stop searching before the next rep's descent is well underway
-                searchRightBound = pkIdx + min(
-                    Int(expectedRepDuration * 0.85 * config.targetSampleRateHz),
-                    (nextPeakIdx - pkIdx) * 3 / 4
-                )
+                // Find the lowest valley point between pkIdx and nextPeakIdx as the hard boundary between reps
+                var interRepMinIdx = pkIdx + 1
+                var interRepMinVal = Double.infinity
+                for i in (pkIdx + 1)..<nextPeakIdx {
+                    if displacements[i] < interRepMinVal {
+                        interRepMinVal = displacements[i]
+                        interRepMinIdx = i
+                    }
+                }
+                searchRightBound = min(pkIdx + maxLookahead, interRepMinIdx + 4)
             } else {
-                searchRightBound = min(n - 1, pkIdx + Int(expectedRepDuration * 1.1 * config.targetSampleRateHz))
+                searchRightBound = min(n - 1, pkIdx + maxLookahead)
             }
             
-            let safeLeftBound = max(0, min(searchLeftBound, pkIdx - 1))
-            let safeRightBound = min(n - 1, max(searchRightBound, pkIdx + 1))
+            let safeLeft = max(0, min(searchLeftBound, pkIdx - 1))
+            let safeRight = min(n - 1, max(searchRightBound, pkIdx + 1))
             
-            let cycle = extractSingleRepetition(
+            let (cycle, endIdx) = extractTwoPhaseRepetition(
                 repIndex: repNum + 1,
-                leftBound: safeLeftBound,
+                leftBound: safeLeft,
                 turnPeakIdx: pkIdx,
-                rightBound: safeRightBound,
+                rightBound: safeRight,
                 samples: samples,
                 displacements: displacements,
                 velocities: velocities,
                 config: config
             )
             cycles.append(cycle)
+            previousRepEndIdx = endIdx
         }
         
         return cycles
     }
     
-    // MARK: - Single Repetition Boundary & Isometric Plateau Extractor
+    // MARK: - Inflection-Trough 2-Phase Boundary Extractor (No Isometric Split)
     
-    private static func extractSingleRepetition(
+    private static func extractTwoPhaseRepetition(
         repIndex: Int,
         leftBound: Int,
         turnPeakIdx: Int,
@@ -294,118 +354,79 @@ public enum OfflineCycleAnalyzer {
         displacements: [Double],
         velocities: [Double],
         config: AnalyzerConfiguration
-    ) -> DetectedCycle {
-        // 1. Find the resting minimum before the peak (valleyLeft) and after the peak (valleyRight)
-        // If there is a long flat rest between reps, pick the LAST minimum before the rise starts (for valleyLeft)
-        // and the FIRST minimum after the descent finishes (for valleyRight).
+    ) -> (cycle: DetectedCycle, endIdx: Int) {
+        let peakVal = displacements[turnPeakIdx]
+        
+        // 1. Locate the pre-rep trough (lowest displacement before the peak in [leftBound...turnPeakIdx])
+        // If there is a flat resting shelf, choose the LAST point in the bottom 3% of that shelf
+        // right before the upward movement begins.
         var minLeftVal = Double.infinity
+        var minLeftIdx = leftBound
         for i in leftBound...turnPeakIdx {
-            if displacements[i] < minLeftVal { minLeftVal = displacements[i] }
-        }
-        var minRightVal = Double.infinity
-        for i in turnPeakIdx...rightBound {
-            if displacements[i] < minRightVal { minRightVal = displacements[i] }
+            if displacements[i] <= minLeftVal {
+                minLeftVal = displacements[i]
+                minLeftIdx = i
+            }
         }
         
-        let peakVal = displacements[turnPeakIdx]
+        // 2. Locate the post-rep trough (lowest displacement after the peak in [turnPeakIdx...rightBound])
+        // Choose the FIRST point in the bottom 3% of the return trough so post-rep standing rest is excluded.
+        var minRightVal = Double.infinity
+        var minRightIdx = rightBound
+        for i in turnPeakIdx...rightBound {
+            if displacements[i] < minRightVal {
+                minRightVal = displacements[i]
+                minRightIdx = i
+            }
+        }
+        
         let stroke1ROM = max(1e-4, peakVal - minLeftVal)
         let stroke2ROM = max(1e-4, peakVal - minRightVal)
         let avgROM = 0.5 * (stroke1ROM + stroke2ROM)
         
-        // 2. Locate maximum positive velocity during Phase 1 [leftBound...turnPeakIdx]
-        // and maximum negative velocity during Phase 2 [turnPeakIdx...rightBound]
-        var vPeak1Idx = leftBound
-        var vPeak1 = 0.0
-        for i in leftBound...turnPeakIdx {
-            if velocities[i] > vPeak1 {
-                vPeak1 = velocities[i]
-                vPeak1Idx = i
-            }
-        }
+        let maxVel = (leftBound...rightBound).map { abs(velocities[$0]) }.max() ?? 0.1
         
-        var vPeak2Idx = turnPeakIdx
-        var vPeak2 = 0.0
-        for i in turnPeakIdx...rightBound {
-            if -velocities[i] > vPeak2 {
-                vPeak2 = -velocities[i]
-                vPeak2Idx = i
-            }
-        }
+        // 3. Refine Start Index: walk forward from `minLeftIdx` only while still flat on the resting floor
+        // (< 3% of ROM departure and velocity < 5% of peak speed) to trim pre-rep standing stillness
+        // without cutting into slow eccentric descents.
+        let departFloor1 = minLeftVal + stroke1ROM * config.crestDepartureRatio
+        let velFloor = maxVel * 0.05
         
-        let maxVel = max(vPeak1, vPeak2)
-        
-        // 3. Find Start of Phase 1 (`startIdx`):
-        // Walk backward from `vPeak1Idx` toward `leftBound` until velocity drops below 10% of `vPeak1`
-        // AND displacement is within the bottom 8% of the resting baseline.
-        let vStartThresh = vPeak1 * max(0.08, config.stillnessVelocityThreshold * 0.75)
-        let dispStartCeiling = minLeftVal + stroke1ROM * max(0.08, config.crestDepartureRatio * 2.0)
-        
-        var startIdx = vPeak1Idx
-        while startIdx > leftBound {
-            let prev = startIdx - 1
-            // Stop walking back once we hit the flat resting floor (velocity near 0 or negative, and near bottom)
-            if velocities[prev] <= vStartThresh && displacements[prev] <= dispStartCeiling {
+        var startIdx = minLeftIdx
+        while startIdx < turnPeakIdx - 2 {
+            if displacements[startIdx] > departFloor1 && velocities[startIdx] > velFloor {
                 break
             }
-            startIdx -= 1
+            startIdx += 1
         }
+        // Step back 1 sample to include the exact onset inflection
+        startIdx = max(minLeftIdx, startIdx - 1)
         
-        // 4. Find End of Phase 1 (`phase1EndIdx`) and Start of Phase 2 (`phase2StartIdx`) around the Turnaround Peak:
-        // Look at the plateau zone between `vPeak1Idx` (peak speed of Phase 1) and `vPeak2Idx` (peak speed of Phase 2).
-        // Any region in `[vPeak1Idx ... vPeak2Idx]` where displacement is in the top 25% of the peak AND
-        // velocity magnitude is below the stillness threshold is the true Isometric Hold.
-        let isoDispFloor = peakVal - 0.25 * min(stroke1ROM, stroke2ROM)
-        let isoVelThresh1 = vPeak1 * config.stillnessVelocityThreshold
-        let isoVelThresh2 = vPeak2 * config.stillnessVelocityThreshold
-        
-        // Walk forward from vPeak1Idx until positive velocity drops below isoVelThresh1 near the top
-        var phase1EndIdx = turnPeakIdx
-        for i in vPeak1Idx...turnPeakIdx {
-            if displacements[i] >= isoDispFloor && velocities[i] <= isoVelThresh1 {
-                phase1EndIdx = i
+        // 4. Refine End Index: walk backward from `minRightIdx` only while flat on the post-rep resting floor
+        let departFloor2 = minRightVal + stroke2ROM * config.crestDepartureRatio
+        var endIdx = minRightIdx
+        while endIdx > turnPeakIdx + 2 {
+            if displacements[endIdx] > departFloor2 && (-velocities[endIdx]) > velFloor {
                 break
             }
+            endIdx -= 1
         }
+        endIdx = min(minRightIdx, endIdx + 1)
         
-        // Walk backward from vPeak2Idx until negative velocity magnitude drops below isoVelThresh2 near the top
-        var phase2StartIdx = turnPeakIdx
-        for i in stride(from: vPeak2Idx, through: turnPeakIdx, by: -1) {
-            if displacements[i] >= isoDispFloor && (-velocities[i]) <= isoVelThresh2 {
-                phase2StartIdx = i
-                break
-            }
-        }
-        
-        // 5. Find End of Phase 2 (`endIdx`):
-        // Walk forward from `vPeak2Idx` toward `rightBound` until downward velocity settles back to baseline
-        let vEndThresh = vPeak2 * max(0.08, config.stillnessVelocityThreshold * 0.75)
-        let dispEndCeiling = minRightVal + stroke2ROM * max(0.08, config.crestDepartureRatio * 2.0)
-        
-        var endIdx = vPeak2Idx
-        while endIdx < rightBound {
-            let next = endIdx + 1
-            if (-velocities[next]) <= vEndThresh && displacements[next] <= dispEndCeiling {
-                break
-            }
-            endIdx += 1
-        }
-        
-        // Enforce strict monotonic ordering
         let maxIdx = samples.count - 1
-        let safeStart = max(0, min(startIdx, maxIdx))
-        let safeEnd = max(safeStart + 2, min(endIdx, maxIdx))
-        let safeP1End = max(safeStart + 1, min(phase1EndIdx, safeEnd - 1))
-        let safeP2Start = max(safeP1End, min(phase2StartIdx, safeEnd - 1))
+        let safeStart = max(0, min(startIdx, maxIdx - 2))
+        let safeTurn = max(safeStart + 1, min(turnPeakIdx, maxIdx - 1))
+        let safeEnd = max(safeTurn + 1, min(endIdx, maxIdx))
         
-        return DetectedCycle(
+        let cycle = DetectedCycle(
             index: repIndex,
             startTime: samples[safeStart].time,
-            phase1EndTime: samples[safeP1End].time,
-            phase2StartTime: samples[safeP2Start].time,
+            turnaroundTime: samples[safeTurn].time,
             endTime: samples[safeEnd].time,
             romMeters: avgROM,
             peakVelocity: maxVel
         )
+        return (cycle, safeEnd)
     }
     
     // MARK: - Uniform Interpolation Resampler

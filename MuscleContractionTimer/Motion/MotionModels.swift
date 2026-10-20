@@ -19,12 +19,11 @@ public enum SensorSource: String, CaseIterable, Identifiable, Codable, Hashable,
 public enum ContractionPhase: String, Codable, Hashable, Sendable {
     case eccentric = "Eccentric"
     case concentric = "Concentric"
-    case isometric = "Isometric"
 }
 
 public enum ExercisePhaseOrder: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
-    case eccentricFirst = "Ecc → Iso → Con"
-    case concentricFirst = "Con → Iso → Ecc"
+    case eccentricFirst = "Eccentric → Concentric"
+    case concentricFirst = "Concentric → Eccentric"
     
     public var id: String { rawValue }
     
@@ -79,7 +78,6 @@ public struct RawMotionFrame: Codable, Hashable, Sendable {
         case timestamp
         case ax, ay, az
         case rotation
-        // Legacy keys so previously saved JSON sets still decode cleanly
         case userAcceleration
         case col0, col1, col2
     }
@@ -105,7 +103,6 @@ public struct RawMotionFrame: Codable, Hashable, Sendable {
             self.az = z
             self.rotation = rot
         } else {
-            // Fallback for sets saved with the previous SIMD schema
             let acc = try container.decode(SIMD3<Double>.self, forKey: .userAcceleration)
             let c0 = try container.decode(SIMD3<Double>.self, forKey: .col0)
             let c1 = try container.decode(SIMD3<Double>.self, forKey: .col1)
@@ -196,21 +193,19 @@ public struct KinematicSample: Identifiable, Sendable {
     }
 }
 
-/// Represents one complete movement cycle with Phase 1, an Isometric turnaround window, and Phase 2.
+/// Represents one complete bi-directional movement cycle partitioned at `turnaroundTime`.
 public struct DetectedCycle: Identifiable, Sendable {
     public var id: Int { index }
     public let index: Int
     public let startTime: TimeInterval
-    public let phase1EndTime: TimeInterval
-    public let phase2StartTime: TimeInterval
+    public let turnaroundTime: TimeInterval
     public let endTime: TimeInterval
     public let romMeters: Double
     public let peakVelocity: Double
     
     public var totalDuration: TimeInterval { max(0, endTime - startTime) }
-    public var phase1Duration: TimeInterval { max(0, phase1EndTime - startTime) }
-    public var isometricDuration: TimeInterval { max(0, phase2StartTime - phase1EndTime) }
-    public var phase2Duration: TimeInterval { max(0, endTime - phase2StartTime) }
+    public var phase1Duration: TimeInterval { max(0, turnaroundTime - startTime) }
+    public var phase2Duration: TimeInterval { max(0, endTime - turnaroundTime) }
     
     public func eccentricDuration(for order: ExercisePhaseOrder) -> TimeInterval {
         order == .eccentricFirst ? phase1Duration : phase2Duration
@@ -221,35 +216,63 @@ public struct DetectedCycle: Identifiable, Sendable {
     }
 }
 
-/// Represents a manually marked repetition with explicit Phase 1, Isometric Pause, and Phase 2 timestamps.
+/// Represents a manually marked repetition with Start, Turnaround, and End timestamps.
+/// Backward-compatible with JSON files saved under the previous schema.
 public struct GroundTruthRep: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public let index: Int
     public let startTime: TimeInterval
-    public let phase1EndTime: TimeInterval
-    public let phase2StartTime: TimeInterval
+    public let turnaroundTime: TimeInterval
     public let endTime: TimeInterval
+    
+    private enum CodingKeys: String, CodingKey {
+        case id, index, startTime, turnaroundTime, endTime
+        // Legacy keys from isometric schema
+        case phase1EndTime, phase2StartTime
+    }
     
     public init(
         id: UUID = UUID(),
         index: Int,
         startTime: TimeInterval,
-        phase1EndTime: TimeInterval,
-        phase2StartTime: TimeInterval,
+        turnaroundTime: TimeInterval,
         endTime: TimeInterval
     ) {
         self.id = id
         self.index = index
         self.startTime = startTime
-        self.phase1EndTime = phase1EndTime
-        self.phase2StartTime = phase2StartTime
+        self.turnaroundTime = turnaroundTime
         self.endTime = endTime
     }
     
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        self.index = try container.decode(Int.self, forKey: .index)
+        self.startTime = try container.decode(TimeInterval.self, forKey: .startTime)
+        self.endTime = try container.decode(TimeInterval.self, forKey: .endTime)
+        
+        if let turn = try? container.decode(TimeInterval.self, forKey: .turnaroundTime) {
+            self.turnaroundTime = turn
+        } else {
+            let p1End = (try? container.decode(TimeInterval.self, forKey: .phase1EndTime)) ?? self.startTime
+            let p2Start = (try? container.decode(TimeInterval.self, forKey: .phase2StartTime)) ?? p1End
+            self.turnaroundTime = 0.5 * (p1End + p2Start)
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(index, forKey: .index)
+        try container.encode(startTime, forKey: .startTime)
+        try container.encode(turnaroundTime, forKey: .turnaroundTime)
+        try container.encode(endTime, forKey: .endTime)
+    }
+    
     public var totalDuration: TimeInterval { max(0, endTime - startTime) }
-    public var phase1Duration: TimeInterval { max(0, phase1EndTime - startTime) }
-    public var isometricDuration: TimeInterval { max(0, phase2StartTime - phase1EndTime) }
-    public var phase2Duration: TimeInterval { max(0, endTime - phase2StartTime) }
+    public var phase1Duration: TimeInterval { max(0, turnaroundTime - startTime) }
+    public var phase2Duration: TimeInterval { max(0, endTime - turnaroundTime) }
     
     public func eccentricDuration(for order: ExercisePhaseOrder) -> TimeInterval {
         order == .eccentricFirst ? phase1Duration : phase2Duration
@@ -260,7 +283,7 @@ public struct GroundTruthRep: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-/// Evaluates temporal accuracy between a detected cycle and a manual ground-truth interval across all 3 phases.
+/// Evaluates temporal accuracy between a detected cycle and a manual ground-truth interval.
 public struct RepAccuracyComparison: Identifiable, Sendable {
     public var id: Int { index }
     public let index: Int
@@ -269,15 +292,12 @@ public struct RepAccuracyComparison: Identifiable, Sendable {
     public let groundTruth: GroundTruthRep
     
     public var startError: TimeInterval { detected.startTime - groundTruth.startTime }
+    public var turnaroundError: TimeInterval { detected.turnaroundTime - groundTruth.turnaroundTime }
     public var endError: TimeInterval { detected.endTime - groundTruth.endTime }
     public var durationError: TimeInterval { detected.totalDuration - groundTruth.totalDuration }
     
     public var eccentricDurationError: TimeInterval {
         detected.eccentricDuration(for: phaseOrder) - groundTruth.eccentricDuration(for: phaseOrder)
-    }
-    
-    public var isometricDurationError: TimeInterval {
-        detected.isometricDuration - groundTruth.isometricDuration
     }
     
     public var concentricDurationError: TimeInterval {
@@ -337,11 +357,6 @@ public struct SessionAnalysisResult: Sendable {
         return cycles.map { $0.eccentricDuration(for: phaseOrder) }.reduce(0, +) / Double(cycles.count)
     }
     
-    public var averageIsometricDuration: TimeInterval {
-        guard !cycles.isEmpty else { return 0 }
-        return cycles.map(\.isometricDuration).reduce(0, +) / Double(cycles.count)
-    }
-    
     public var averageConcentricDuration: TimeInterval {
         guard !cycles.isEmpty else { return 0 }
         return cycles.map { $0.concentricDuration(for: phaseOrder) }.reduce(0, +) / Double(cycles.count)
@@ -371,16 +386,16 @@ public struct SessionAnalysisResult: Sendable {
         return comps.map { abs($0.eccentricDurationError) }.reduce(0, +) / Double(comps.count)
     }
     
-    public var meanAbsoluteIsometricError: TimeInterval? {
-        let comps = accuracyComparisons
-        guard !comps.isEmpty else { return nil }
-        return comps.map { abs($0.isometricDurationError) }.reduce(0, +) / Double(comps.count)
-    }
-    
     public var meanAbsoluteConcentricError: TimeInterval? {
         let comps = accuracyComparisons
         guard !comps.isEmpty else { return nil }
         return comps.map { abs($0.concentricDurationError) }.reduce(0, +) / Double(comps.count)
+    }
+    
+    public var meanAbsoluteTurnaroundError: TimeInterval? {
+        let comps = accuracyComparisons
+        guard !comps.isEmpty else { return nil }
+        return comps.map { abs($0.turnaroundError) }.reduce(0, +) / Double(comps.count)
     }
     
     public var meanIoU: Double? {

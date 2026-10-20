@@ -24,8 +24,7 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
     public enum ManualRepCaptureState: Equatable {
         case idle
         case inFirstPhase(startTime: TimeInterval)
-        case inIsometricPause(startTime: TimeInterval, phase1EndTime: TimeInterval)
-        case inSecondPhase(startTime: TimeInterval, phase1EndTime: TimeInterval, phase2StartTime: TimeInterval)
+        case inSecondPhase(startTime: TimeInterval, turnaroundTime: TimeInterval)
     }
     
     @Published public private(set) var state: SessionState = .idle
@@ -131,50 +130,31 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
         }
     }
     
-    // MARK: - Ground Truth 4-Stage Phase Marking
+    // MARK: - Ground Truth 3-Stage Phase Marking (Phase 1 -> Turnaround -> Phase 2)
     
     public func startManualPhase1() {
         guard case .recording = state, case .idle = manualCaptureState else { return }
         manualCaptureState = .inFirstPhase(startTime: currentRelativeTime())
     }
     
-    public func stopManualPhase1EnterIsometric() {
+    public func transitionManualToPhase2() {
         guard case .recording = state, case .inFirstPhase(let start) = manualCaptureState else { return }
-        let p1End = currentRelativeTime()
-        guard p1End > start + 0.05 else { return }
-        manualCaptureState = .inIsometricPause(startTime: start, phase1EndTime: p1End)
-    }
-    
-    public func transitionDirectlyToPhase2() {
-        guard case .recording = state, case .inFirstPhase(let start) = manualCaptureState else { return }
-        let now = currentRelativeTime()
-        guard now > start + 0.05 else { return }
-        manualCaptureState = .inSecondPhase(startTime: start, phase1EndTime: now, phase2StartTime: now)
-    }
-    
-    public func startManualPhase2FromIsometric() {
-        guard case .recording = state,
-              case .inIsometricPause(let start, let p1End) = manualCaptureState else { return }
-        let p2Start = currentRelativeTime()
-        manualCaptureState = .inSecondPhase(
-            startTime: start,
-            phase1EndTime: p1End,
-            phase2StartTime: max(p1End, p2Start)
-        )
+        let turnaround = currentRelativeTime()
+        guard turnaround > start + 0.05 else { return }
+        manualCaptureState = .inSecondPhase(startTime: start, turnaroundTime: turnaround)
     }
     
     public func endManualPhase2() {
         guard case .recording = state,
-              case .inSecondPhase(let start, let p1End, let p2Start) = manualCaptureState else { return }
+              case .inSecondPhase(let start, let turnaround) = manualCaptureState else { return }
         let end = currentRelativeTime()
         manualCaptureState = .idle
         
-        guard end > p2Start + 0.05 else { return }
+        guard end > turnaround + 0.05 else { return }
         let rep = GroundTruthRep(
             index: manualGroundTruthReps.count + 1,
             startTime: start,
-            phase1EndTime: p1End,
-            phase2StartTime: p2Start,
+            turnaroundTime: turnaround,
             endTime: end
         )
         manualGroundTruthReps.append(rep)
@@ -228,7 +208,7 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
                 targetRepCount: targetReps,
                 source: sourceSnapshot,
                 configuration: configSnapshot,
-                phaseOrder: orderSnapshot // Passes exercise sequence into the analyzer
+                phaseOrder: orderSnapshot
             )
             let enrichedResult = SessionAnalysisResult(
                 source: baseResult.source,
@@ -246,7 +226,6 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
         }
     }
     
-    /// Packages the current recording into a `PersistedMotionSet` and saves it to the provided store.
     public func saveCurrentSet(title: String, to store: MotionSetStore) {
         guard !recordedFrames.isEmpty else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)

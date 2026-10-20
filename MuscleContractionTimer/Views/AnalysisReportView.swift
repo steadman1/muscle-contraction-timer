@@ -27,10 +27,9 @@ public struct AnalysisReportView: View {
     }
     
     private var summaryMetricsGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-            metricTile(title: "Avg Ecc", value: String(format: "%.2fs", result.averageEccentricDuration), unit: "lengthen")
-            metricTile(title: "Avg Iso", value: String(format: "%.2fs", result.averageIsometricDuration), unit: "hold/pause")
-            metricTile(title: "Avg Con", value: String(format: "%.2fs", result.averageConcentricDuration), unit: "shorten")
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+            metricTile(title: "Avg Eccentric", value: String(format: "%.2fs", result.averageEccentricDuration), unit: "lengthen")
+            metricTile(title: "Avg Concentric", value: String(format: "%.2fs", result.averageConcentricDuration), unit: "shorten")
             metricTile(title: "Avg ROM", value: String(format: "%.1f", result.averageROMCentimeters), unit: "cm")
         }
     }
@@ -53,14 +52,14 @@ public struct AnalysisReportView: View {
                     unit: "ecc error"
                 )
                 metricTile(
-                    title: "Iso MAE",
-                    value: String(format: "%.2fs", result.meanAbsoluteIsometricError ?? 0),
-                    unit: "pause error"
-                )
-                metricTile(
                     title: "Con MAE",
                     value: String(format: "%.2fs", result.meanAbsoluteConcentricError ?? 0),
                     unit: "con error"
+                )
+                metricTile(
+                    title: "Turn MAE",
+                    value: String(format: "%.2fs", result.meanAbsoluteTurnaroundError ?? 0),
+                    unit: "turnaround"
                 )
                 metricTile(
                     title: "Overlap",
@@ -94,7 +93,7 @@ public struct AnalysisReportView: View {
     private var displacementChartCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Segmented Displacement & Isometric Windows")
+                Text("Segmented Displacement Curve")
                     .font(.headline)
                 Spacer()
                 Text(String(format: "PCA Linearity: %.0f%%", result.explainedVarianceRatio * 100))
@@ -108,13 +107,11 @@ public struct AnalysisReportView: View {
                         xStart: .value("Start", cycle.startTime),
                         xEnd: .value("End", cycle.endTime)
                     )
-                    .foregroundStyle(.green.opacity(0.13))
+                    .foregroundStyle(.green.opacity(0.15))
                     
-                    RectangleMark(
-                        xStart: .value("Iso Start", cycle.phase1EndTime),
-                        xEnd: .value("Iso End", cycle.phase2StartTime)
-                    )
-                    .foregroundStyle(.orange.opacity(0.32))
+                    RuleMark(x: .value("Turnaround", cycle.turnaroundTime))
+                        .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                        .foregroundStyle(.orange)
                 }
                 
                 ForEach(result.groundTruthReps) { gt in
@@ -141,7 +138,7 @@ public struct AnalysisReportView: View {
             HStack(spacing: 12) {
                 Label("Active Rep", systemImage: "square.fill")
                     .foregroundColor(.green)
-                Label("Isometric Hold", systemImage: "square.fill")
+                Label("Turnaround Peak", systemImage: "line.diagonal")
                     .foregroundColor(.orange)
                 if !result.groundTruthReps.isEmpty {
                     Label("Manual Start/End", systemImage: "line.vertical.and.line.vertical")
@@ -184,9 +181,6 @@ public struct AnalysisReportView: View {
                     HStack(spacing: 10) {
                         Text(String(format: "%@: %.2fs", p1Label, cycle.phase1Duration))
                         Text("•")
-                        Text(String(format: "Iso: %.2fs", cycle.isometricDuration))
-                            .foregroundColor(.orange)
-                        Text("•")
                         Text(String(format: "%@: %.2fs", p2Label, cycle.phase2Duration))
                         Spacer()
                         Text(String(format: "%.1f cm", cycle.romMeters * 100.0))
@@ -194,14 +188,14 @@ public struct AnalysisReportView: View {
                     }
                     .font(.caption.bold().monospacedDigit())
                     
-                    Text(String(format: "Window: %.2fs → [Iso: %.2fs–%.2fs] → %.2fs", cycle.startTime, cycle.phase1EndTime, cycle.phase2StartTime, cycle.endTime))
+                    Text(String(format: "Window: %.2fs → %.2fs (turn) → %.2fs", cycle.startTime, cycle.turnaroundTime, cycle.endTime))
                         .font(.caption2.monospacedDigit())
                         .foregroundColor(.secondary)
                     
                     if let comp = comparisons[cycle.index] {
                         Divider()
                         HStack {
-                            Text(String(format: "Manual: %.2fs (%@: %.2fs | Iso: %.2fs | %@: %.2fs)", comp.groundTruth.totalDuration, p1Label, comp.groundTruth.phase1Duration, comp.groundTruth.isometricDuration, p2Label, comp.groundTruth.phase2Duration))
+                            Text(String(format: "Manual: %.2fs (%@: %.2fs | %@: %.2fs)", comp.groundTruth.totalDuration, p1Label, comp.groundTruth.phase1Duration, p2Label, comp.groundTruth.phase2Duration))
                                 .font(.caption.monospacedDigit())
                                 .foregroundColor(.purple)
                             Spacer()
@@ -211,8 +205,8 @@ public struct AnalysisReportView: View {
                         
                         HStack(spacing: 10) {
                             Text(String(format: "ΔEcc: %+.2fs", comp.eccentricDurationError))
-                            Text(String(format: "ΔIso: %+.2fs", comp.isometricDurationError))
                             Text(String(format: "ΔCon: %+.2fs", comp.concentricDurationError))
+                            Text(String(format: "ΔTurn: %+.2fs", comp.turnaroundError))
                         }
                         .font(.caption2.monospacedDigit())
                         .foregroundColor(.secondary)

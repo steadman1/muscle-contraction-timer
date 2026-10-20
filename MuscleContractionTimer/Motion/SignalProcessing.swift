@@ -11,18 +11,25 @@ import simd
 
 public enum SignalProcessing {
     
-    // MARK: - 1. Principal Component Analysis
+    // MARK: - 1. Core-Window Principal Component Analysis
     
+    /// Computes the dominant 3D movement axis using only the central 70% [15%...85%] of the recording
+    /// so pre-set and post-set phone/barbell handling noise does not skew the eigenvector.
     public static func computePrincipalAxis(_ vectors: [SIMD3<Double>]) -> (axis: SIMD3<Double>, explainedVariance: Double) {
-        let n = Double(vectors.count)
-        guard n > 3 else { return (SIMD3<Double>(0, 0, 1), 1.0) }
+        let total = vectors.count
+        guard total > 6 else { return (SIMD3<Double>(0, 0, 1), 1.0) }
         
-        let mean = vectors.reduce(SIMD3<Double>.zero, +) / n
+        let trimStart = Int(Double(total) * 0.15)
+        let trimEnd = max(trimStart + 4, Int(Double(total) * 0.85))
+        let coreSlice = vectors[trimStart..<min(total, trimEnd)]
+        let n = Double(coreSlice.count)
+        
+        let mean = coreSlice.reduce(SIMD3<Double>.zero, +) / n
         
         var c00 = 0.0, c01 = 0.0, c02 = 0.0
         var c11 = 0.0, c12 = 0.0, c22 = 0.0
         
-        for v in vectors {
+        for v in coreSlice {
             let d = v - mean
             c00 += d.x * d.x
             c01 += d.x * d.y
@@ -32,7 +39,7 @@ public enum SignalProcessing {
             c22 += d.z * d.z
         }
         
-        let invN = 1.0 / (n - 1.0)
+        let invN = 1.0 / max(1.0, n - 1.0)
         var matrix: [Double] = [
             c00 * invN, c01 * invN, c02 * invN,
             c01 * invN, c11 * invN, c12 * invN,
@@ -92,7 +99,6 @@ public enum SignalProcessing {
         let a1 = 2.0 * (wc2 - 1.0) * norm
         let a2 = (1.0 - sqrt2 * wc + wc2) * norm
         
-        // Pad signal with reflected endpoints to eliminate startup/ending filter transients
         let padLen = min(signal.count - 1, 60)
         var padded = [Double]()
         padded.reserveCapacity(signal.count + 2 * padLen)
@@ -121,7 +127,6 @@ public enum SignalProcessing {
         a1: Double, a2: Double
     ) -> [Double] {
         var y = [Double](repeating: 0.0, count: x.count)
-        // Initialize state to steady-state DC value of first sample
         let dcGain = (b0 + b1 + b2) / (1.0 + a1 + a2)
         var z1 = x[0] * (b1 + b2 - (a1 + a2) * dcGain)
         var z2 = x[0] * (b2 - a2 * dcGain)
@@ -149,8 +154,6 @@ public enum SignalProcessing {
         return integrated
     }
     
-    /// Subtracts a two-pass (zero-phase) moving average baseline of `windowSamples` width,
-    /// eliminating drift without bowing the signal endpoints or distorting flat isometric shelves.
     public static func detrendMovingBaseline(signal: [Double], windowSamples: Int) -> [Double] {
         let n = signal.count
         guard n > 4 else { return signal }
@@ -169,7 +172,6 @@ public enum SignalProcessing {
             return out
         }
         
-        // Two passes of boxcar smoothing = triangular zero-phase low-pass baseline
         let pass1 = boxcarSmooth(signal)
         let baseline = boxcarSmooth(pass1)
         
@@ -180,42 +182,61 @@ public enum SignalProcessing {
         return detrended
     }
     
-    // MARK: - 4. Automatic Rest-Baseline Polarity Calibration
+    // MARK: - 4. Core-Window Rest-Baseline Polarity Calibration
     
-    /// Determines whether the stationary rest baseline sits at the bottom (troughs) or top (crests)
-    /// of the displacement wave. If the stationary rest periods sit at the troughs (like in IMG_0963 & IMG_0966
-    /// where standing rest is at -25cm and squatting down peaks at +50cm), it ensures the wave is oriented
-    /// so that Rest = Bottom Trough and Turnaround Excursion = Positive Peak (+cm).
+    /// Inspects the central 70% of the recording to orient the displacement wave so that
+    /// Stationary Rest = Bottom Trough and Active Repetition Turnaround = Positive Peak (+cm).
     public static func orientExcursionPositive(displacement: [Double], velocity: [Double]) -> [Double] {
-        let n = displacement.count
-        guard n > 20 else { return displacement }
+        let total = displacement.count
+        guard total > 20 else { return displacement }
         
-        // Compute 90th percentile of positive vs negative excursion relative to median
-        let sortedDisp = displacement.sorted()
+        let lo = Int(Double(total) * 0.15)
+        let hi = max(lo + 10, Int(Double(total) * 0.85))
+        let coreDisp = Array(displacement[lo..<min(total, hi)])
+        let coreVel = Array(velocity[lo..<min(total, hi)])
+        let n = coreDisp.count
+        
+        let sortedDisp = coreDisp.sorted()
         let p10 = sortedDisp[max(0, Int(Double(n) * 0.10))]
         let p50 = sortedDisp[n / 2]
         let p90 = sortedDisp[min(n - 1, Int(Double(n) * 0.90))]
         
-        // Also find the mean displacement of the quietest 30% of samples (stationary rest periods)
-        let absVel = velocity.map(abs)
+        let absVel = coreVel.map(abs)
         let sortedVel = absVel.sorted()
-        let quietVelCutoff = sortedVel[max(0, Int(Double(n) * 0.30))]
+        let quietVelCutoff = sortedVel[max(0, Int(Double(n) * 0.35))]
         
         var quietSum = 0.0
         var quietCount = 0.0
         for i in 0..<n where absVel[i] <= quietVelCutoff {
-            quietSum += displacement[i]
+            quietSum += coreDisp[i]
             quietCount += 1.0
         }
         let quietMean = quietCount > 0 ? (quietSum / quietCount) : p50
         let midRange = 0.5 * (p10 + p90)
         
-        // If stationary rest periods sit above the mid-range of the wave, invert the signal
-        // so that rest periods always sit at the bottom trough and active rep excursions rise to positive peaks.
         if quietMean > midRange {
             return displacement.map { -$0 }
         } else {
             return displacement
+        }
+    }
+    
+    // MARK: - 5. Tukey Cosine Edge Taper Weight
+    
+    /// Returns a weight in [0.15, 1.0] that penalizes candidate peaks near the very start or end
+    /// of the recording (where pre-set setup and post-set racking artifacts occur) while keeping
+    /// the middle [edgeFraction ... 1 - edgeFraction] at full weight 1.0.
+    public static func centralWindowWeight(normalizedPosition u: Double, edgeFraction: Double = 0.12) -> Double {
+        let clampedU = min(max(u, 0.0), 1.0)
+        guard edgeFraction > 0 else { return 1.0 }
+        if clampedU < edgeFraction {
+            let phase = clampedU / edgeFraction
+            return 0.15 + 0.85 * 0.5 * (1.0 - cos(.pi * phase))
+        } else if clampedU > (1.0 - edgeFraction) {
+            let phase = (1.0 - clampedU) / edgeFraction
+            return 0.15 + 0.85 * 0.5 * (1.0 - cos(.pi * phase))
+        } else {
+            return 1.0
         }
     }
 }

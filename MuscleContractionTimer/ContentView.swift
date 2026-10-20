@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AVKit
 
 public struct ContentView: View {
     @StateObject private var controller = MotionSessionController()
@@ -37,7 +38,7 @@ public struct ContentView: View {
             .tabItem {
                 Label("Workout", systemImage: "dumbbell.fill")
             }
-            .scrollDismissesKeyboard(.interactively) 
+            .scrollDismissesKeyboard(.interactively)
             
             RecorderTabView(controller: controller, store: store)
                 .tabItem {
@@ -126,7 +127,7 @@ public struct RecorderTabView: View {
         return VStack(spacing: 14) {
             switch controller.state {
             case .idle:
-                Text("Sequence: \(p1Name) → Isometric Hold → \(p2Name)")
+                Text("Sequence: \(p1Name) → \(p2Name)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 
@@ -225,14 +226,13 @@ public struct RecorderTabView: View {
                 
                 Divider()
                 
-                // Persist Set Section
                 if controller.hasSavedCurrentSet {
                     Label("Saved to Test Bench", systemImage: "checkmark.seal.fill")
                         .font(.subheadline.bold())
                         .foregroundColor(.green)
                 } else {
                     HStack(spacing: 8) {
-                        TextField("Set name (e.g., Paused Squat 10 Reps)", text: $customSetTitle)
+                        TextField("Set name (e.g., Back Squat 8 Reps)", text: $customSetTitle)
                             .textFieldStyle(.roundedBorder)
                             .font(.subheadline)
                         
@@ -292,48 +292,21 @@ public struct RecorderTabView: View {
                 .foregroundColor(.secondary)
             
         case .inFirstPhase(let startTime):
-            VStack(spacing: 8) {
-                Button {
-                    controller.stopManualPhase1EnterIsometric()
-                } label: {
-                    Label("Stop \(p1Name) (Enter Isometric Hold)", systemImage: "pause.circle.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 46)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
-                
-                Button {
-                    controller.transitionDirectlyToPhase2()
-                } label: {
-                    Label("Instant Turnaround → Start \(p2Name) (0s Iso)", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.subheadline.bold())
-                        .frame(maxWidth: .infinity, minHeight: 36)
-                }
-                .buttonStyle(.bordered)
-                .tint(.blue)
+            Button {
+                controller.transitionManualToPhase2()
+            } label: {
+                Label("Stop \(p1Name) → Start \(p2Name)", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 48)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
             
             Text(String(format: "Active: %@ phase (started at %.2fs)...", p1Name, startTime))
                 .font(.caption.monospacedDigit())
                 .foregroundColor(.orange)
             
-        case .inIsometricPause(let startTime, let p1EndTime):
-            Button {
-                controller.startManualPhase2FromIsometric()
-            } label: {
-                Label("Start \(p2Name) (End Isometric)", systemImage: "bolt.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
-            
-            Text(String(format: "%@: %.2fs | Holding Isometric since %.2fs...", p1Name, p1EndTime - startTime, p1EndTime))
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.blue)
-            
-        case .inSecondPhase(let startTime, let p1EndTime, let p2StartTime):
+        case .inSecondPhase(let startTime, let turnaroundTime):
             Button {
                 controller.endManualPhase2()
             } label: {
@@ -344,7 +317,7 @@ public struct RecorderTabView: View {
             .buttonStyle(.borderedProminent)
             .tint(.purple)
             
-            Text(String(format: "%@: %.2fs | Iso: %.2fs | Active: %@...", p1Name, p1EndTime - startTime, p2StartTime - p1EndTime, p2Name))
+            Text(String(format: "%@: %.2fs | Active: %@ (turnaround at %.2fs)...", p1Name, turnaroundTime - startTime, p2Name, turnaroundTime))
                 .font(.caption.monospacedDigit())
                 .foregroundColor(.purple)
         }

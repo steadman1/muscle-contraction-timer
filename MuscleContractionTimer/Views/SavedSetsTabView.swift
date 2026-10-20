@@ -9,7 +9,7 @@ import SwiftUI
 
 public struct SavedSetsTabView: View {
     @ObservedObject var store: MotionSetStore
-    @State private var batchSummary: (eccMAE: Double, isoMAE: Double, conMAE: Double, iou: Double)?
+    @State private var batchSummary: (eccMAE: Double, conMAE: Double, turnMAE: Double, iou: Double)?
     @State private var isRunningBatch = false
     
     public init(store: MotionSetStore) {
@@ -30,9 +30,9 @@ public struct SavedSetsTabView: View {
                                 HStack {
                                     benchmarkStat(label: "Ecc MAE", value: String(format: "%.2fs", summary.eccMAE))
                                     Spacer()
-                                    benchmarkStat(label: "Iso MAE", value: String(format: "%.2fs", summary.isoMAE))
-                                    Spacer()
                                     benchmarkStat(label: "Con MAE", value: String(format: "%.2fs", summary.conMAE))
+                                    Spacer()
+                                    benchmarkStat(label: "Turn MAE", value: String(format: "%.2fs", summary.turnMAE))
                                     Spacer()
                                     benchmarkStat(label: "Mean IoU", value: String(format: "%.0f%%", summary.iou * 100))
                                 }
@@ -135,8 +135,8 @@ public struct SavedSetsTabView: View {
         
         Task.detached(priority: .userInitiated) {
             var eccErrors: [Double] = []
-            var isoErrors: [Double] = []
             var conErrors: [Double] = []
+            var turnErrors: [Double] = []
             var ious: [Double] = []
             
             for set in setsSnapshot {
@@ -156,18 +156,18 @@ public struct SavedSetsTabView: View {
                     groundTruthReps: set.groundTruthReps
                 )
                 if let e = enriched.meanAbsoluteEccentricError { eccErrors.append(e) }
-                if let i = enriched.meanAbsoluteIsometricError { isoErrors.append(i) }
                 if let c = enriched.meanAbsoluteConcentricError { conErrors.append(c) }
+                if let t = enriched.meanAbsoluteTurnaroundError { turnErrors.append(t) }
                 if let u = enriched.meanIoU { ious.append(u) }
             }
             
             let avgEcc = eccErrors.isEmpty ? 0 : eccErrors.reduce(0, +) / Double(eccErrors.count)
-            let avgIso = isoErrors.isEmpty ? 0 : isoErrors.reduce(0, +) / Double(isoErrors.count)
             let avgCon = conErrors.isEmpty ? 0 : conErrors.reduce(0, +) / Double(conErrors.count)
+            let avgTurn = turnErrors.isEmpty ? 0 : turnErrors.reduce(0, +) / Double(turnErrors.count)
             let avgIoU = ious.isEmpty ? 0 : ious.reduce(0, +) / Double(ious.count)
             
             await MainActor.run {
-                self.batchSummary = (avgEcc, avgIso, avgCon, avgIoU)
+                self.batchSummary = (avgEcc, avgCon, avgTurn, avgIoU)
                 self.isRunningBatch = false
             }
         }
@@ -256,12 +256,12 @@ public struct SavedSetDetailView: View {
             VStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Stillness Velocity Threshold")
+                        Text("Edge Exclusion Taper Ratio")
                         Spacer()
-                        Text(String(format: "%.3f m/s", config.stillnessVelocityThreshold))
+                        Text(String(format: "%.0f%%", config.edgeExclusionRatio * 100))
                             .monospacedDigit()
                     }
-                    Slider(value: $config.stillnessVelocityThreshold, in: 0.01...0.20, step: 0.005) { editing in
+                    Slider(value: $config.edgeExclusionRatio, in: 0.0...0.30, step: 0.02) { editing in
                         if !editing { runAnalysis() }
                     }
                 }
@@ -273,7 +273,7 @@ public struct SavedSetDetailView: View {
                         Text(String(format: "%.2f", config.crestDepartureRatio))
                             .monospacedDigit()
                     }
-                    Slider(value: $config.crestDepartureRatio, in: 0.01...0.25, step: 0.01) { editing in
+                    Slider(value: $config.crestDepartureRatio, in: 0.01...0.15, step: 0.01) { editing in
                         if !editing { runAnalysis() }
                     }
                 }
@@ -285,7 +285,7 @@ public struct SavedSetDetailView: View {
                         Text(String(format: "%.2f Hz", config.highPassCutoffHz))
                             .monospacedDigit()
                     }
-                    Slider(value: $config.highPassCutoffHz, in: 0.02...0.40, step: 0.02) { editing in
+                    Slider(value: $config.highPassCutoffHz, in: 0.02...0.35, step: 0.02) { editing in
                         if !editing { runAnalysis() }
                     }
                 }

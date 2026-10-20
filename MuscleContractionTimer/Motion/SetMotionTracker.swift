@@ -30,6 +30,7 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
     private let activityManager = CMMotionActivityManager()
     
     private var recordedFrames: [RawMotionFrame] = []
+    private var currentTrackingSource: SensorSource = .iPhone
     private let motionQueue: OperationQueue = {
         let q = OperationQueue()
         q.name = "com.musclecontractiontimer.setrowqueue"
@@ -41,6 +42,7 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         super.init()
         iPhoneManager.deviceMotionUpdateInterval = 1.0 / 100.0
         headphoneManager.delegate = self
+        isAirPodsConnected = headphoneManager.isDeviceMotionAvailable
         requestPermissionsIfNeeded()
     }
     
@@ -57,13 +59,13 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         activeSet = set
         activeSetID = set.id
         
-        // Auto-select AirPods if connected, otherwise fall back to iPhone
-        let sourceToUse: SensorSource = (selectedSource == .airPods || isAirPodsConnected) ? .airPods : .iPhone
+        var sourceToUse: SensorSource = selectedSource
         
         switch sourceToUse {
         case .airPods:
             AudioHandoffManager.shared.triggerAirPodsHandoff()
             if headphoneManager.isDeviceMotionAvailable {
+                currentTrackingSource = .airPods
                 AudioHandoffManager.shared.playActionCue()
                 headphoneManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
                     guard let motion = motion, error == nil else { return }
@@ -74,9 +76,12 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
                 }
                 return
             }
+            // Fall back to iPhone if headphone motion is unavailable
+            sourceToUse = .iPhone
             fallthrough
             
         case .iPhone:
+            currentTrackingSource = .iPhone
             guard iPhoneManager.isDeviceMotionAvailable else { return }
             AudioHandoffManager.shared.playActionCue()
             iPhoneManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
@@ -95,7 +100,7 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         AudioHandoffManager.shared.playActionCue()
         
         let framesSnapshot = recordedFrames
-        let sourceSnapshot: SensorSource = (selectedSource == .airPods || isAirPodsConnected) ? .airPods : .iPhone
+        let sourceSnapshot = currentTrackingSource
         let orderSnapshot = phaseOrder
         
         activeSet = nil
