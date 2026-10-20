@@ -12,7 +12,7 @@ struct ExerciseView: View {
     
     var body: some View {
         VStack(spacing: Constants.Padding.m) {
-            VStack(spacing: Constants.Padding.l) {
+            VStack(spacing: Constants.Padding.m) {
                 HStack {
                     exerciseInfoTitle
                     
@@ -22,10 +22,14 @@ struct ExerciseView: View {
                     exerciseInfoTitleButton(systemName: "ellipsis")
                 }
                 
-                VStack {
+                VStack(spacing: Constants.Padding.s) {
                     ForEach(viewModel.sets.enumerated(), id: \.0) { index, set in
                         
-                        ExerciseSetView(index, set)
+                        ExerciseSetView(index, set) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                viewModel.sets.removeAll { $0.id == set.id }
+                            }
+                        }
                     }
                 }
             }
@@ -36,9 +40,9 @@ struct ExerciseView: View {
                     .fill(Color.background)
                     .strokeBorder(Color.stroke, lineWidth: Constants.strokeWidth)
             )
+            .clipped()
             .compositingGroup()
-            .shadow(color: Color.shadow, radius: 12)
-            .shadow(color: Color.shadow, radius: 4)
+            .shadow(color: Color.shadow, radius: 4, y: 4)
             
             HStack {
                 
@@ -57,6 +61,9 @@ struct ExerciseView: View {
                 
                 
                 Button {
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                    
                     viewModel.addSet()
                 } label: {
                     HStack {

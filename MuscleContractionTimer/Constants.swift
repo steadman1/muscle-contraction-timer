@@ -38,10 +38,10 @@ class Constants {
 class Fonts {
     static let title: Font = .system(size: 24, weight: .medium, design: .rounded)
     
-    static let headline: Font = .system(size: 20, weight: .semibold, design: .rounded)
+    static let headline: Font = .system(size: 17, weight: .semibold, design: .rounded)
     
-    static let body: Font = .system(size: 16, weight: .medium, design: .rounded)
+    static let body: Font = .system(size: 17, weight: .medium, design: .rounded)
     
-    static let subheadline: Font = .system(size: 16, weight: .semibold, design: .rounded)
-    static let subhead: Font = .system(size: 16, weight: .medium, design: .rounded)
+    static let subheadline: Font = .system(size: 15, weight: .semibold, design: .rounded)
+    static let subhead: Font = .system(size: 15, weight: .medium, design: .rounded)
 }
