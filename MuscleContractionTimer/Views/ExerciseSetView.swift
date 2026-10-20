@@ -8,8 +8,16 @@
 import SwiftUI
 import Combine
 
-fileprivate let setRowHeight: CGFloat = 40
+let setRowHeight: CGFloat = 40 // used in SetRowBoxes.swift
 fileprivate let deleteActionWidth: CGFloat = setRowHeight
+fileprivate let pageSpacing: CGFloat = 8
+fileprivate let peekSliverWidth: CGFloat = setRowHeight
+
+private enum SetRowSwipePage: Int {
+    case inputs = 0
+    case contractionTimings = 1
+    case deleteAction = 2
+}
 
 struct ExerciseSetView: View {
 
@@ -18,8 +26,9 @@ struct ExerciseSetView: View {
     let index: Int
     var onDelete: (() -> Void)?
     
-    @State private var offset: CGFloat = 0
-    @State private var isSwipedOpen: Bool = false
+    @State private var dragOffset: CGFloat = 0
+    @State private var swipePage: SetRowSwipePage = .inputs
+    @State private var pagerViewportWidth: CGFloat = 260
     
     init(_ index: Int, _ set: ExerciseSet, onDelete: (() -> Void)? = nil) {
         self.index = index
@@ -27,8 +36,33 @@ struct ExerciseSetView: View {
         self.onDelete = onDelete
     }
     
-    private var revealProgress: CGFloat {
-        min(max(-offset / deleteActionWidth, 0), 1)
+    // Width of Page 1 (Timings) reduced by peekSliverWidth so a sliver of Page 0 remains visible on the left
+    private var timingsPageWidth: CGFloat {
+        max(1, pagerViewportWidth - peekSliverWidth - pageSpacing)
+    }
+    
+    // Distance required to page from [Weight | Reps | Play] to [Eccentric | Concentric]
+    private var pageStepDistance: CGFloat {
+        max(1, pagerViewportWidth - peekSliverWidth)
+    }
+    
+    // Total negative offset to reach the Delete reveal state
+    private var maxNegativeOffset: CGFloat {
+        onDelete != nil ? -(pageStepDistance + deleteActionWidth) : -pageStepDistance
+    }
+    
+    // Translates the inner pager between Page 0 and Page 1
+    private var innerPagerOffset: CGFloat {
+        min(0, max(-pageStepDistance, dragOffset))
+    }
+    
+    // Translates the entire row left only after Page 1 is reached, revealing the Delete button
+    private var rowDeleteOffset: CGFloat {
+        dragOffset < -pageStepDistance ? (dragOffset + pageStepDistance) : 0
+    }
+    
+    private var deleteRevealProgress: CGFloat {
+        min(max(-rowDeleteOffset / deleteActionWidth, 0), 1)
     }
     
     var body: some View {
@@ -40,20 +74,31 @@ struct ExerciseSetView: View {
             exerciseSetDetails
                 .simultaneousGesture(
                     DragGesture(
-                        minimumDistance: 0,
+                        minimumDistance: 10,
                         coordinateSpace: .local
                     )
-                    .onChanged { revealDeleteSetContent(value: $0) }
-                    .onEnded { finishRevealDeleteSetContent(value: $0) }
+                    .onChanged { handleDragChanged(value: $0) }
+                    .onEnded { handleDragEnded(value: $0) }
                 )
+        }
+        // swipe to timings immediately after timing processing finishes
+        .onChange(of: set.isAnalyzingContraction) { _, isAnalyzing in
+            if !isAnalyzing && set.state == .finished {
+                snapToPage(.contractionTimings, animated: true)
+            }
+        }
+        .onChange(of: set.state) { _, newState in
+            if newState == .notStarted {
+                snapToPage(.inputs, animated: true)
+            }
         }
     }
     
     private var deleteSetContent: some View {
         Button(role: .destructive) {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                offset = 0
-                isSwipedOpen = false
+                dragOffset = 0
+                swipePage = .inputs
             }
             onDelete?()
         } label: {
@@ -62,14 +107,18 @@ struct ExerciseSetView: View {
                 .foregroundStyle(Color.red)
         }
         .frame(width: deleteActionWidth)
-        .opacity(revealProgress)
-        .scaleEffect(0.5 + (0.5 * revealProgress), anchor: .trailing)
+        .opacity(deleteRevealProgress)
+        .scaleEffect(0.5 + (0.5 * deleteRevealProgress), anchor: .trailing)
     }
     
     private var exerciseSetDetails: some View {
-        HStack {
+        HStack(spacing: pageSpacing) {
             Button {
-                // no set type picker bc this is just a prototype
+                if swipePage == .inputs {
+                    snapToPage(.contractionTimings, animated: true)
+                } else {
+                    snapToPage(.inputs, animated: true)
+                }
             } label: {
                 Text("\(index + 1)")
                     .font(Fonts.headline)
@@ -85,149 +134,161 @@ struct ExerciseSetView: View {
                     )
             }
             
-            SetRowInputBox(set: set, text: $set.weight, unit: "lbs")
-            
-            SetRowInputBox(set: set, text: $set.reps, unit: "reps")
-            
-            Button {
-                if isSwipedOpen {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        offset = 0
-                        isSwipedOpen = false
+            // Sliding Viewport: Page 0 = [Weight | Reps | Play], Page 1 = [Sliver + Eccentric | Concentric]
+            GeometryReader { geo in
+                let width = geo.size.width
+                HStack(spacing: pageSpacing) {
+                    // Page 0: Weight, Reps, and Play/Finish Button (moves together on swipe)
+                    HStack(spacing: pageSpacing) {
+                        SetRowInputBox(set: set, text: $set.weight, unit: "lbs")
+                        SetRowInputBox(set: set, text: $set.reps, unit: "reps")
+                        cycleStateButton
                     }
-                } else {
-                    let generator = UIImpactFeedbackGenerator(style: .medium)
-                    generator.impactOccurred()
+                    .frame(width: width, height: setRowHeight)
                     
-                    set.cycleState()
-                }
-            } label: {
-                Image(systemName: set.stateSymbol)
-                    .font(Fonts.headline)
-                    .frame(width: setRowHeight, height: setRowHeight)
-                    .foregroundStyle(set.stateStyle.cycleStateForeground)
-                    .background(
-                        RoundedRectangle(cornerRadius: Constants.Radius.max)
-                            .fill(set.stateStyle.cycleStateBackground)
-                            .strokeBorder(
-                                set.stateStyle.stroke,
-                                lineWidth: Constants.strokeWidth
-                            )
-                    )
-            }
-        }
-        .contentShape(Rectangle())
-        .offset(x: offset)
-    }
-    
-    func revealDeleteSetContent(value: DragGesture.Value) {
-        guard onDelete != nil else { return }
-        // Ignore vertical scrolls
-        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-        
-        let baseOffset: CGFloat = isSwipedOpen ? -deleteActionWidth : 0
-        let proposed = baseOffset + value.translation.width
-        
-        if proposed < 0 {
-            if proposed < -deleteActionWidth {
-                let excess = proposed + deleteActionWidth
-                offset = -deleteActionWidth + (excess * 0.25)
-            } else {
-                offset = proposed
-            }
-        } else {
-            offset = proposed * 0.15
-        }
-    }
-    
-    func finishRevealDeleteSetContent(value: DragGesture.Value) {
-        guard onDelete != nil else { return }
-        let baseOffset: CGFloat = isSwipedOpen ? -deleteActionWidth : 0
-        let predictedEnd = baseOffset + value.predictedEndTranslation.width
-        
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            if predictedEnd < -(deleteActionWidth * 0.5) {
-                offset = -deleteActionWidth
-                isSwipedOpen = true
-            } else {
-                offset = 0
-                isSwipedOpen = false
-            }
-        }
-    }
-}
-
-struct SetRowInputBox: View {
-    
-    @ObservedObject var set: ExerciseSet
-    @Binding var text: String
-    let unit: String
-    
-    @FocusState private var isFocused: Bool
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            ZStack(alignment: .leading) {
-                // textbox shrinks width of the input area
-                Text(text.isEmpty ? "0" : text)
-                    .font(Fonts.headline)
-                    .fixedSize()
-                    .opacity(0)
-                    .overlay {
-                        TextField("0", text: $text)
-                            .font(Fonts.headline)
-                            .fixedSize()
-                            .keyboardType(.numberPad)
-                            .lineLimit(1)
-                            .multilineTextAlignment(.leading)
-                            .focused($isFocused)
-                            .onReceive(Just(text)) { newValue in
-                                let filtered = newValue.filter { "0123456789".contains($0) }
-                                if filtered != newValue {
-                                    text = filtered
-                                }
-                            }
-                            .foregroundStyle(
-                                // not very elegant, ik
-                                isFocused
-                                    ? Color.primaryFocused
-                                    : set.stateStyle.primaryText
-                            )
+                    // Page 1: Eccentric & Concentric Contraction Timing Boxes
+                    HStack(spacing: pageSpacing) {
+                        SetRowTimingBox(
+                            set: set,
+                            duration: set.eccentricDuration,
+                            isAnalyzing: set.isAnalyzingContraction,
+                            unit: "ecc"
+                        )
+                        SetRowTimingBox(
+                            set: set,
+                            duration: set.concentricDuration,
+                            isAnalyzing: set.isAnalyzingContraction,
+                            unit: "con"
+                        )
                     }
+                    .frame(width: timingsPageWidth, height: setRowHeight)
+                }
+                .offset(x: innerPagerOffset)
+                .onAppear {
+                    if width > 0 { pagerViewportWidth = width }
+                }
+                .onChange(of: width) { _, newWidth in
+                    guard newWidth > 0 else { return }
+                    pagerViewportWidth = newWidth
+                    snapToPage(swipePage, animated: false)
+                }
             }
             .frame(height: setRowHeight)
-            
-            Text(unit)
-                .font(Fonts.headline)
-                .foregroundStyle(
-                    isFocused
-                        ? Color.primaryFocused
-                        : set.stateStyle.secondaryText
-                )
+            .frame(maxWidth: .infinity)
+            .clipped()
         }
-        .padding(.horizontal, 10)
-        .frame(height: setRowHeight)
-        .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: Constants.Radius.m)
-                .fill(
-                    isFocused
-                        ? Color.secondaryFocused
-                        : set.stateStyle.foreground
-                )
-                .strokeBorder(
-                    isFocused
-                        ? Color.primaryFocused.opacity(0.1)
-                        : set.stateStyle.stroke,
-                    lineWidth: Constants.strokeWidth
-                )
-        )
         .contentShape(Rectangle())
-        .onTapGesture {
-            let generator = UIImpactFeedbackGenerator(style: .medium)
-            generator.impactOccurred()
-            
-            isFocused = true
+        .offset(x: rowDeleteOffset)
+    }
+    
+    private var cycleStateButton: some View {
+        Button {
+            if swipePage != .inputs {
+                snapToPage(.inputs, animated: true)
+            } else {
+                let generator = UIImpactFeedbackGenerator(style: .medium)
+                generator.impactOccurred()
+                
+                set.cycleState()
+                
+                // If analysis completed synchronously (e.g. <20 frames), swipe immediately
+                if set.state == .finished && !set.isAnalyzingContraction {
+                    snapToPage(.contractionTimings, animated: true)
+                }
+            }
+        } label: {
+            Image(systemName: set.stateSymbol)
+                .font(Fonts.headline)
+                .frame(width: setRowHeight, height: setRowHeight)
+                .foregroundStyle(set.stateStyle.cycleStateForeground)
+                .background(
+                    RoundedRectangle(cornerRadius: Constants.Radius.max)
+                        .fill(set.stateStyle.cycleStateBackground)
+                        .strokeBorder(
+                            set.stateStyle.stroke,
+                            lineWidth: Constants.strokeWidth
+                        )
+                )
         }
+    }
+    
+    private func anchorOffset(for page: SetRowSwipePage) -> CGFloat {
+        switch page {
+        case .inputs:
+            return 0
+        case .contractionTimings:
+            return -pageStepDistance
+        case .deleteAction:
+            return onDelete != nil ? -(pageStepDistance + deleteActionWidth) : -pageStepDistance
+        }
+    }
+    
+    private func snapToPage(_ page: SetRowSwipePage, animated: Bool) {
+        let target = anchorOffset(for: page)
+        if animated {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                swipePage = page
+                dragOffset = target
+            }
+        } else {
+            swipePage = page
+            dragOffset = target
+        }
+    }
+    
+    private func handleDragChanged(value: DragGesture.Value) {
+        guard abs(value.translation.width) > abs(value.translation.height) else { return }
+        
+        let baseOffset = anchorOffset(for: swipePage)
+        let proposed = baseOffset + value.translation.width
+        
+        if proposed > 0 {
+            dragOffset = proposed * 0.15
+        } else if proposed < maxNegativeOffset {
+            let excess = proposed - maxNegativeOffset
+            dragOffset = maxNegativeOffset + (excess * 0.25)
+        } else {
+            dragOffset = proposed
+        }
+    }
+    
+    private func handleDragEnded(value: DragGesture.Value) {
+        let baseOffset = anchorOffset(for: swipePage)
+        let predictedEnd = baseOffset + value.predictedEndTranslation.width
+        let actualEnd = baseOffset + value.translation.width
+        
+        let nextPage: SetRowSwipePage
+        switch swipePage {
+        case .inputs:
+            if predictedEnd < -(pageStepDistance * 0.35) || actualEnd < -(pageStepDistance * 0.5) {
+                nextPage = .contractionTimings
+            } else {
+                nextPage = .inputs
+            }
+            
+        case .contractionTimings:
+            let deleteThreshold = -pageStepDistance - (deleteActionWidth * 0.45)
+            let returnThreshold = -(pageStepDistance * 0.65)
+            
+            if onDelete != nil && (predictedEnd < deleteThreshold || actualEnd < deleteThreshold) {
+                nextPage = .deleteAction
+            } else if predictedEnd > returnThreshold || actualEnd > returnThreshold {
+                nextPage = .inputs
+            } else {
+                nextPage = .contractionTimings
+            }
+            
+        case .deleteAction:
+            let closeDeleteThreshold = -pageStepDistance - (deleteActionWidth * 0.55)
+            if predictedEnd > -(pageStepDistance * 0.5) {
+                nextPage = .inputs
+            } else if predictedEnd > closeDeleteThreshold || actualEnd > closeDeleteThreshold {
+                nextPage = .contractionTimings
+            } else {
+                nextPage = .deleteAction
+            }
+        }
+        
+        snapToPage(nextPage, animated: true)
     }
 }

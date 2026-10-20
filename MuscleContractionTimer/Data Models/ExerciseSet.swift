@@ -17,9 +17,26 @@ class ExerciseSet: ObservableObject {
     let id = UUID()
     
     @Published var weight: String // not Double for simplicity with text input
-    @Published var reps: String  // not Int for simplicity with text input
+    @Published var reps: String { // not Int for simplicity with text input
+        didSet {
+            if oldValue != reps, state == .finished, !recordedFrames.isEmpty {
+                recomputeTimings()
+            }
+        }
+    }
     @Published var state: ExerciseSetState
     
+    @Published var setStarted: Date
+    @Published var setFinished: Date
+    
+    // Post-hoc Muscle Contraction Timings (Seconds)
+    @Published var eccentricDuration: TimeInterval?
+    @Published var concentricDuration: TimeInterval?
+    @Published var isAnalyzingContraction: Bool = false
+    
+    private(set) var recordedFrames: [RawMotionFrame] = []
+    private var recordedSource: SensorSource = .iPhone
+    private var recordedPhaseOrder: ExercisePhaseOrder = .eccentricFirst
     
     init(
         weight: Int, // Int instead of Double also for simplicity lol
@@ -29,34 +46,104 @@ class ExerciseSet: ObservableObject {
         self.weight = String(weight)
         self.reps = String(reps)
         self.state = state
+        self.setStarted = Date()
+        self.setFinished = Date()
     }
     
     fileprivate init(
         weight: String,
-         reps: String,
-         state: ExerciseSetState = .notStarted
+        reps: String,
+        state: ExerciseSetState = .notStarted,
+        eccentricDuration: TimeInterval? = nil,
+        concentricDuration: TimeInterval? = nil,
+        recordedFrames: [RawMotionFrame] = []
     ) {
         self.weight = weight
         self.reps = reps
         self.state = state
+        self.setStarted = Date()
+        self.setFinished = Date()
+        self.eccentricDuration = eccentricDuration
+        self.concentricDuration = concentricDuration
+        self.recordedFrames = recordedFrames
     }
     
     func copy() -> ExerciseSet {
         return ExerciseSet(
             weight: self.weight,
             reps: self.reps,
-            state: self.state
+            state: self.state,
+            eccentricDuration: self.eccentricDuration,
+            concentricDuration: self.concentricDuration,
+            recordedFrames: self.recordedFrames
         )
     }
 
+    @MainActor
     func cycleState() {
         switch self.state {
         case .notStarted:
+            self.setStarted = Date()
+            self.eccentricDuration = nil
+            self.concentricDuration = nil
             self.state = .started
+            SetMotionTracker.shared.beginTracking(for: self)
+            
         case .started:
+            self.setFinished = Date()
             self.state = .finished
+            SetMotionTracker.shared.finishTracking(for: self)
+            
         case .finished:
+            SetMotionTracker.shared.cancelTracking(for: self)
+            self.eccentricDuration = nil
+            self.concentricDuration = nil
+            self.recordedFrames.removeAll()
             self.state = .notStarted
+        }
+    }
+    
+    func storeAndAnalyze(
+        frames: [RawMotionFrame],
+        source: SensorSource,
+        phaseOrder: ExercisePhaseOrder
+    ) {
+        self.recordedFrames = frames
+        self.recordedSource = source
+        self.recordedPhaseOrder = phaseOrder
+        recomputeTimings()
+    }
+    
+    func recomputeTimings() {
+        let targetReps = max(1, Int(reps) ?? 1)
+        let framesSnapshot = recordedFrames
+        let sourceSnapshot = recordedSource
+        let orderSnapshot = recordedPhaseOrder
+        
+        guard framesSnapshot.count > 20 else {
+            self.eccentricDuration = 0
+            self.concentricDuration = 0
+            self.isAnalyzingContraction = false
+            return
+        }
+        
+        self.isAnalyzingContraction = true
+        
+        Task.detached(priority: .userInitiated) {
+            let result = await OfflineCycleAnalyzer.analyze(
+                frames: framesSnapshot,
+                targetRepCount: targetReps,
+                source: sourceSnapshot,
+                phaseOrder: orderSnapshot
+            )
+            let avgEcc = await result.averageEccentricDuration
+            let avgCon = await result.averageConcentricDuration
+            
+            await MainActor.run { [weak self] in
+                self?.eccentricDuration = avgEcc
+                self?.concentricDuration = avgCon
+                self?.isAnalyzingContraction = false
+            }
         }
     }
 }
