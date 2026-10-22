@@ -106,13 +106,11 @@ struct ExerciseView: View {
                     .font(Fonts.headline)
                 HStack(spacing: Constants.Padding.xs) {
                     Group {
+                        Image(systemName: motionTracker.selectedSource == .airPods ? "airpodspro" : "iphone")
                         Text(viewModel.exercise.equipmentName)
                         Text(" • ")
                             .foregroundStyle(Color.tertiaryText)
                         Text("\(viewModel.sets.count) Sets")
-                        Text(" • ")
-                            .foregroundStyle(Color.tertiaryText)
-                        Image(systemName: motionTracker.selectedSource == .airPods ? "airpodspro" : "iphone")
                     }
                     .foregroundStyle(Color.secondaryText)
                     .font(Fonts.subheadline)

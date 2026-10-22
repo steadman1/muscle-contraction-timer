@@ -36,7 +36,8 @@ class Constants {
 }
 
 class Fonts {
-    static let title: Font = .system(size: 24, weight: .medium, design: .rounded)
+    static let title: Font = .system(size: 24, weight: .semibold, design: .rounded)
+    static let subtitle: Font = .system(size: 20, weight: .semibold, design: .rounded)
     
     static let headline: Font = .system(size: 17, weight: .semibold, design: .rounded)
     

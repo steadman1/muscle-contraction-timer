@@ -9,36 +9,16 @@ import SwiftUI
 import AVKit
 
 public struct ContentView: View {
+    
     @StateObject private var controller = MotionSessionController()
     @StateObject private var store = MotionSetStore()
     
-    private let exerciseViewModel = ExerciseViewModel(
-        exercise: Exercise(
-            name: "Back Squat",
-            equipmentName: "Barbell",
-            demonstrationImage: .init("squat")
-        ),
-        sets: [
-            .init(weight: 135, reps: 8),
-            .init(weight: 135, reps: 7),
-            .init(weight: 135, reps: 6)
-        ]
-    )
-    
-    public init() {}
-    
     public var body: some View {
         TabView {
-            ScrollView {
-                ExerciseView(viewModel: exerciseViewModel)
-                    .padding(Constants.Padding.m)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.background)
+            ActiveWorkoutView()
             .tabItem {
                 Label("Workout", systemImage: "dumbbell.fill")
             }
-            .scrollDismissesKeyboard(.interactively)
             
             RecorderTabView(controller: controller, store: store)
                 .tabItem {
