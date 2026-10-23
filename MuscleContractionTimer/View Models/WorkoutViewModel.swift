@@ -12,6 +12,8 @@ import Combine
 final class WorkoutViewModel: ObservableObject, Identifiable {
     let id = UUID()
     
+    let name: String
+    
     @Published public var exercises: [ExerciseViewModel] = []
     @Published public var currentExerciseIndex: Int = 0
     @Published public var workoutStartDate: Date?
@@ -22,7 +24,8 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
     private var timerCancellable: AnyCancellable?
     private let motionTracker = SetMotionTracker.shared
     
-    init(exercises: [ExerciseViewModel] = []) {
+    init(name: String, exercises: [ExerciseViewModel] = []) {
+        self.name = name
         self.exercises = exercises
         self.workoutStartDate = Date()
         
@@ -73,6 +76,9 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
         }
     }
     
+    var exerciseCountDetails: String {
+        "\(self.exercises.count) Exercises, \(self.exercises.reduce(0) { $0 + $1.sets.count}) Sets"
+    }
     
     var currentExercise: ExerciseViewModel? {
         guard exercises.indices.contains(currentExerciseIndex) else {
@@ -173,36 +179,5 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
         } else {
             return String(format: "%02d:%02d", minutes, seconds)
         }
-    }
-    
-    // MARK: - Defaults
-    
-    static func defaultExercises() -> [ExerciseViewModel] {
-        [
-            ExerciseViewModel(
-                exercise: Exercise(
-                    name: "Back Squat",
-                    equipmentName: "Barbell",
-                    demonstrationImage: .init("squat")
-                ),
-                sets: [
-                    .init(weight: 135, reps: 8),
-                    .init(weight: 135, reps: 7),
-                    .init(weight: 135, reps: 6)
-                ]
-            ),
-            ExerciseViewModel(
-                exercise: Exercise(
-                    name: "Pull Ups",
-                    equipmentName: "Pull Up Bar",
-                    demonstrationImage: .init("pull_up")
-                ),
-                sets: [
-                    .init(weight: 45, reps: 6),
-                    .init(weight: 45, reps: 5),
-                    .init(weight: 45, reps: 4)
-                ]
-            )
-        ]
     }
 }

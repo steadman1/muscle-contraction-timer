@@ -7,6 +7,36 @@
 
 import SwiftUI
 
+fileprivate let legsAndBackWorkout = WorkoutViewModel(
+    name: "Legs and Back",
+    exercises: [
+        ExerciseViewModel(
+            exercise: Exercise(
+                name: "Back Squat",
+                equipmentName: "Barbell",
+                demonstrationImage: .init("squat")
+            ),
+            sets: [
+                .init(weight: 135, reps: 8),
+                .init(weight: 135, reps: 7),
+                .init(weight: 135, reps: 6)
+            ]
+        ),
+        ExerciseViewModel(
+            exercise: Exercise(
+                name: "Pull Ups",
+                equipmentName: "Pull Up Bar",
+                demonstrationImage: .init("pull_up")
+            ),
+            sets: [
+                .init(weight: 45, reps: 6),
+                .init(weight: 45, reps: 5),
+                .init(weight: 45, reps: 4)
+            ]
+        )
+    ]
+)
+
 public struct ContentView: View {
     
     @StateObject private var controller = MotionSessionController()
@@ -14,7 +44,26 @@ public struct ContentView: View {
     
     public var body: some View {
         TabView {
-            ActiveWorkoutView()
+            ScrollView {
+                VStack(alignment: .leading) {
+                    Text("Routines")
+                        .font(Fonts.headline)
+                        .foregroundStyle(Color.primaryText)
+                        .padding(.leading, Constants.Padding.m)
+                    ScrollView(.horizontal) {
+                        HStack {
+                            WorkoutTemplateView(
+                                workoutViewModel: legsAndBackWorkout
+                            )
+                        }
+                        .padding(.leading, Constants.Padding.m)
+                    }
+                    .scrollClipDisabled()
+                }
+            }
+            .padding(.vertical, Constants.Padding.m)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.background)
             .tabItem {
                 Label("Workout", systemImage: "dumbbell.fill")
             }

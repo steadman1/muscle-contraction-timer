@@ -11,7 +11,7 @@ fileprivate let bottomBarHeight: CGFloat = 64
 
 struct ActiveWorkoutView: View {
     
-    @StateObject private var workoutViewModel = WorkoutViewModel(exercises: WorkoutViewModel.defaultExercises())
+    @StateObject var workoutViewModel: WorkoutViewModel
     
     var body: some View {
         ScrollView {
@@ -26,8 +26,10 @@ struct ActiveWorkoutView: View {
         .background(Color.background)
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .top) {
-            HeaderView(timeString: workoutViewModel.workoutDurationString)
-                .padding(.horizontal, Constants.Padding.m)
+            HeaderView(
+                timeString: workoutViewModel.workoutDurationString,
+                workoutName: workoutViewModel.name
+            )
         }
         .safeAreaInset(edge: .bottom) {
             FooterView(
@@ -46,21 +48,59 @@ struct ActiveWorkoutView: View {
 }
 
 struct HeaderView: View {
-    var timeString: String = "00:00"
+    var timeString: String
+    let workoutName: String
     
     var body: some View {
         HStack {
-            Text(timeString)
-                .font(Fonts.title)
-                .monospacedDigit()
-            Spacer()
-            Button(action: {}) {
-                Image(systemName: "ellipsis")
+            VStack(alignment: .leading) {
+                Text(timeString)
+                    .font(Fonts.title)
+                    .foregroundStyle(Color.primaryText)
+                
+                Text(workoutName)
+                    .font(Fonts.headline)
+                    .foregroundStyle(Color.secondaryText)
             }
-            .buttonStyle(.glass)
-            .clipShape(RoundedRectangle(cornerRadius: Constants.Radius.max))
+            
+            Spacer()
+            
+            HStack {
+                Button(action: {}) {
+                    Text("Finish")
+                        .font(Fonts.headline)
+                        .foregroundStyle(Color.primaryActive)
+                }
+                .padding(.vertical, Constants.Padding.s)
+                .padding(.horizontal, Constants.Padding.m)
+                .clipShape(RoundedRectangle(cornerRadius: Constants.Radius.max))
+                .glassEffect(
+                    .regular
+                        .tint(.primaryActive.opacity(0.2))
+                        .interactive()
+                )
+                
+                Button(action: {}) {
+                    Image(systemName: "ellipsis")
+                        .font(Fonts.headline)
+                        .foregroundStyle(Color.primaryText)
+                        .frame(width: 0, height: 0) // restrict size so that the non-square image wont cause weird ghost sizing after the clipShape is applied
+                        .padding(Constants.Padding.m + 2) // sloppy but it makes the height match the finish button to its left
+                }
+                .clipShape(Circle())
+                .glassEffect(.regular, in: .circle)
+                
+            }
         }
-        .background(.ultraThinMaterial)
+        .padding(Constants.Padding.m)
+        .background {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Color.white.opacity(0.02)
+                    .blendMode(.plusLighter) // remove the slight dark tint from the material
+            }
+            .ignoresSafeArea()
+        }
     }
 }
 
@@ -139,7 +179,7 @@ struct FooterView: View {
                     }
                     .frame(width: bottomBarHeight, height: bottomBarHeight)
                 }
-                .glassEffect()
+                .glassEffect(.regular.interactive())
             }
         }
     }
@@ -161,7 +201,7 @@ struct AudioLevelIcon: View {
                     ForEach(0..<levels[columnIndex], id: \.self) { _ in
                         Capsule()
                             .fill(tintColor)
-                            .frame(width: 5, height: 3)
+                            .frame(width: 4, height: 3)
                     }
                 }
             }
@@ -170,5 +210,35 @@ struct AudioLevelIcon: View {
 }
 
 #Preview {
-    ActiveWorkoutView()
+    let viewModel = WorkoutViewModel(
+        name: "Legs and Back",
+        exercises: [
+            ExerciseViewModel(
+                exercise: Exercise(
+                    name: "Back Squat",
+                    equipmentName: "Barbell",
+                    demonstrationImage: .init("squat")
+                ),
+                sets: [
+                    .init(weight: 135, reps: 8),
+                    .init(weight: 135, reps: 7),
+                    .init(weight: 135, reps: 6)
+                ]
+            ),
+            ExerciseViewModel(
+                exercise: Exercise(
+                    name: "Pull Ups",
+                    equipmentName: "Pull Up Bar",
+                    demonstrationImage: .init("pull_up")
+                ),
+                sets: [
+                    .init(weight: 45, reps: 6),
+                    .init(weight: 45, reps: 5),
+                    .init(weight: 45, reps: 4)
+                ]
+            )
+        ]
+    )
+    
+    ActiveWorkoutView(workoutViewModel: viewModel)
 }
