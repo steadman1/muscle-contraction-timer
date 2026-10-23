@@ -7,7 +7,8 @@
 
 import SwiftUI
 
-struct Exercise {
+struct Exercise: Identifiable {
+    var id: UUID = UUID()
     var name: String
     var equipmentName: String // should use enum, but ill stick with a string for the mvp
     var demonstrationImage: Image

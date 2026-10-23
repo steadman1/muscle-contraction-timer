@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ExerciseView: View {
-    @StateObject var viewModel: ExerciseViewModel
+    @ObservedObject var viewModel: ExerciseViewModel
     @ObservedObject private var motionTracker = SetMotionTracker.shared
     
     var body: some View {
@@ -122,7 +122,15 @@ struct ExerciseView: View {
     private var trackingOptionsEllipsisButton: some View {
         Menu {
             Section("Motion Tracking Device") {
-                Picker("Sensor Source", selection: $motionTracker.selectedSource) {
+                Picker("Sensor Source", selection: Binding(
+                    get: { motionTracker.selectedSource },
+                    set: { newSource in
+                        motionTracker.selectedSource = newSource
+                        if newSource == .airPods {
+                            AudioHandoffManager.shared.triggerAirPodsHandoff()
+                        }
+                    }
+                )) {
                     Label("iPhone", systemImage: "iphone")
                         .tag(SensorSource.iPhone)
                     
@@ -137,7 +145,7 @@ struct ExerciseView: View {
                     Button {
                         AudioHandoffManager.shared.triggerAirPodsHandoff()
                     } label: {
-                        Label("Connect AirPods Audio", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Nudge AirPods Connection", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
             }

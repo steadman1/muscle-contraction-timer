@@ -1,0 +1,208 @@
+//
+//  WorkoutViewModel.swift
+//  MuscleContractionTimer
+//
+//  Created by Spencer Steadman on 10/23/26.
+//
+
+import SwiftUI
+import Combine
+
+@MainActor
+final class WorkoutViewModel: ObservableObject, Identifiable {
+    let id = UUID()
+    
+    @Published public var exercises: [ExerciseViewModel] = []
+    @Published public var currentExerciseIndex: Int = 0
+    @Published public var workoutStartDate: Date?
+    @Published public var now: Date = Date()
+    @Published public var heartRateString: String = "—"
+    
+    private var exerciseCancellables: [AnyCancellable] = []
+    private var timerCancellable: AnyCancellable?
+    private let motionTracker = SetMotionTracker.shared
+    
+    init(exercises: [ExerciseViewModel] = []) {
+        self.exercises = exercises
+        self.workoutStartDate = Date()
+        
+        bindExercises()
+        startTimer()
+    }
+    
+    // MARK: - Exercise Management
+    
+    func addExercise(_ exercise: Exercise, sets: [ExerciseSet] = []) {
+        let initialSets = sets.isEmpty ? [
+            ExerciseSet(weight: 135, reps: 8),
+            ExerciseSet(weight: 135, reps: 8),
+            ExerciseSet(weight: 135, reps: 8)
+        ] : sets
+        
+        let newVM = ExerciseViewModel(exercise: exercise, sets: initialSets)
+        exercises.append(newVM)
+        bindExercises()
+    }
+    
+    func addExerciseViewModel(_ exerciseViewModel: ExerciseViewModel) {
+        exercises.append(exerciseViewModel)
+        bindExercises()
+    }
+    
+    func removeExercise(at offsets: IndexSet) {
+        exercises.remove(atOffsets: offsets)
+        if currentExerciseIndex >= exercises.count {
+            currentExerciseIndex = max(0, exercises.count - 1)
+        }
+        bindExercises()
+    }
+    
+    func removeExercise(id: UUID) {
+        exercises.removeAll { $0.id == id }
+        if currentExerciseIndex >= exercises.count {
+            currentExerciseIndex = max(0, exercises.count - 1)
+        }
+        bindExercises()
+    }
+    
+    func bindExercises() {
+        exerciseCancellables = exercises.map { vm in
+            vm.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+    
+    
+    var currentExercise: ExerciseViewModel? {
+        guard exercises.indices.contains(currentExerciseIndex) else {
+            return exercises.first
+        }
+        return exercises[currentExerciseIndex]
+    }
+    
+    /// The exercise that is actively recording motion or the currently focused exercise.
+    var activeOrCurrentExercise: ExerciseViewModel {
+        if let activeID = motionTracker.activeSetID,
+           let runningExercise = exercises.first(where: { vm in vm.sets.contains(where: { $0.id == activeID }) }) {
+            return runningExercise
+        }
+        if let runningExercise = exercises.first(where: { vm in vm.sets.contains(where: { $0.state == .started }) }) {
+            return runningExercise
+        }
+        return currentExercise ?? exercises.first ?? ExerciseViewModel(
+            exercise: Exercise(name: "Exercise", equipmentName: "Equipment", demonstrationImage: .init("squat")),
+            sets: []
+        )
+    }
+    
+    /// Returns the currently active set, or the next upcoming/last finished set for the active exercise.
+    var activeOrLastSet: ExerciseSet? {
+        if let activeID = motionTracker.activeSetID,
+           let set = activeOrCurrentExercise.sets.first(where: { $0.id == activeID }) {
+            return set
+        }
+        return activeOrCurrentExercise.activeOrCurrentSet
+    }
+    
+    // MARK: - Timing & Durations
+    
+    var workoutElapsedTime: TimeInterval {
+        guard let start = workoutStartDate else { return 0 }
+        return max(0, now.timeIntervalSince(start))
+    }
+    
+    var workoutDurationString: String {
+        formatDuration(workoutElapsedTime)
+    }
+    
+    var setDurationString: String {
+        guard let set = activeOrLastSet else {
+            return "00:00"
+        }
+        
+        switch set.state {
+        case .started:
+            let elapsed = max(0, now.timeIntervalSince(set.setStarted))
+            return formatDuration(elapsed)
+        case .finished:
+            let elapsed = max(0, set.setFinished.timeIntervalSince(set.setStarted))
+            return formatDuration(elapsed)
+        case .notStarted:
+            return "00:00"
+        }
+    }
+    
+    var stateSymbol: String {
+        activeOrLastSet?.stateSymbol ?? activeOrCurrentExercise.stateSymbol
+    }
+    
+    // MARK: - Actions
+    
+    func startWorkoutIfNeeded() {
+        if workoutStartDate == nil {
+            workoutStartDate = Date()
+        }
+        now = Date()
+    }
+    
+    func cycleCurrentSetState() {
+        activeOrCurrentExercise.cycleCurrentSetState()
+    }
+    
+    func updateTime(to date: Date = Date()) {
+        now = date
+    }
+    
+    func startTimer() {
+        timerCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] currentDate in
+                self?.now = currentDate
+            }
+    }
+    
+    func formatDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%02d:%02d", minutes, seconds)
+        }
+    }
+    
+    // MARK: - Defaults
+    
+    static func defaultExercises() -> [ExerciseViewModel] {
+        [
+            ExerciseViewModel(
+                exercise: Exercise(
+                    name: "Back Squat",
+                    equipmentName: "Barbell",
+                    demonstrationImage: .init("squat")
+                ),
+                sets: [
+                    .init(weight: 135, reps: 8),
+                    .init(weight: 135, reps: 7),
+                    .init(weight: 135, reps: 6)
+                ]
+            ),
+            ExerciseViewModel(
+                exercise: Exercise(
+                    name: "Pull Ups",
+                    equipmentName: "Pull Up Bar",
+                    demonstrationImage: .init("pull_up")
+                ),
+                sets: [
+                    .init(weight: 45, reps: 6),
+                    .init(weight: 45, reps: 5),
+                    .init(weight: 45, reps: 4)
+                ]
+            )
+        ]
+    }
+}

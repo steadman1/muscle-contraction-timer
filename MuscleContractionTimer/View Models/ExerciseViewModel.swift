@@ -8,7 +8,9 @@
 import Foundation
 import Combine
 
-class ExerciseViewModel: ObservableObject {
+class ExerciseViewModel: ObservableObject, Identifiable {
+    
+    var id: UUID { exercise.id }
     
     @Published var exercise: Exercise
     @Published var sets: [ExerciseSet]

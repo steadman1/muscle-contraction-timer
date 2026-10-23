@@ -102,7 +102,6 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
                 state = .error("iPhone motion sensors unavailable.")
                 return
             }
-            AudioHandoffManager.shared.playActionCue()
             state = .recording(frameCount: 0, elapsed: 0)
             iPhoneManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
                 guard let motion = motion, error == nil else { return }
@@ -118,7 +117,6 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
                 state = .error("AirPods motion unavailable.")
                 return
             }
-            AudioHandoffManager.shared.playActionCue()
             state = .recording(frameCount: 0, elapsed: 0)
             headphoneManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
                 guard let motion = motion, error == nil else { return }
@@ -175,7 +173,6 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
         }
         
         stopHardwareUpdates()
-        AudioHandoffManager.shared.playActionCue()
         
         guard recordedFrames.count > 20,
               let first = recordedFrames.first?.timestamp,

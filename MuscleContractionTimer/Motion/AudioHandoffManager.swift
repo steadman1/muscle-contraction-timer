@@ -13,7 +13,6 @@ public final class AudioHandoffManager {
     public static let shared = AudioHandoffManager()
     
     private var silentPlayer: AVAudioPlayer?
-    private var cuePlayer: AVAudioPlayer?
     private let session = AVAudioSession.sharedInstance()
     
     private init() {
@@ -31,29 +30,19 @@ public final class AudioHandoffManager {
     }
     
     private func prepareBuffers() {
-        let silentWAV = Self.synthesizeWAV(frequency: 0, duration: 0.25, amplitude: 0.0)
-        let cueWAV = Self.synthesizeWAV(frequency: 880.0, duration: 0.12, amplitude: 0.35)
-        
+        let silentWAV = Self.synthesizeSilentWAV(duration: 0.25)
         silentPlayer = try? AVAudioPlayer(data: silentWAV)
         silentPlayer?.prepareToPlay()
-        
-        cuePlayer = try? AVAudioPlayer(data: cueWAV)
-        cuePlayer?.prepareToPlay()
     }
     
+    /// Silent handoff activation to nudge AirPods to connect for motion streaming.
     public func triggerAirPodsHandoff() {
         try? session.setActive(true)
         silentPlayer?.currentTime = 0
         silentPlayer?.play()
     }
     
-    public func playActionCue() {
-        if cuePlayer?.isPlaying == true { cuePlayer?.stop() }
-        cuePlayer?.currentTime = 0
-        cuePlayer?.play()
-    }
-    
-    private static func synthesizeWAV(frequency: Double, duration: Double, amplitude: Double) -> Data {
+    private static func synthesizeSilentWAV(duration: Double) -> Data {
         let sampleRate = 44100.0
         let numSamples = Int(sampleRate * duration)
         let dataSize = numSamples * 2
@@ -84,15 +73,8 @@ public final class AudioHandoffManager {
         data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
         appendUInt32(UInt32(dataSize))
         
-        for i in 0..<numSamples {
-            let sample: Int16
-            if frequency > 0 {
-                let t = Double(i) / sampleRate
-                let env = 1.0 - (Double(i) / Double(numSamples))
-                sample = Int16(sin(2.0 * .pi * frequency * t) * amplitude * env * Double(Int16.max))
-            } else {
-                sample = 0
-            }
+        for _ in 0..<numSamples {
+            let sample: Int16 = 0
             let le = sample.littleEndian
             data.append(contentsOf: withUnsafeBytes(of: le) { Array($0) })
         }

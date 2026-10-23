@@ -66,7 +66,6 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
             AudioHandoffManager.shared.triggerAirPodsHandoff()
             if headphoneManager.isDeviceMotionAvailable {
                 currentTrackingSource = .airPods
-                AudioHandoffManager.shared.playActionCue()
                 headphoneManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
                     guard let motion = motion, error == nil else { return }
                     let frame = RawMotionFrame(from: motion)
@@ -83,7 +82,6 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         case .iPhone:
             currentTrackingSource = .iPhone
             guard iPhoneManager.isDeviceMotionAvailable else { return }
-            AudioHandoffManager.shared.playActionCue()
             iPhoneManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, error in
                 guard let motion = motion, error == nil else { return }
                 let frame = RawMotionFrame(from: motion)
@@ -97,7 +95,6 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
     func finishTracking(for set: ExerciseSet) {
         guard activeSetID == set.id else { return }
         stopHardwareUpdates()
-        AudioHandoffManager.shared.playActionCue()
         
         let framesSnapshot = recordedFrames
         let sourceSnapshot = currentTrackingSource

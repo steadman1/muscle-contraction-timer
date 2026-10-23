@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AVKit
 
 public struct ContentView: View {
     
@@ -77,9 +76,6 @@ public struct RecorderTabView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    
-                    AudioRoutePicker()
-                        .frame(width: 28, height: 28)
                 }
             }
             
