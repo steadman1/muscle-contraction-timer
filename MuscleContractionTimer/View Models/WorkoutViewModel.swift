@@ -9,10 +9,10 @@ import SwiftUI
 import Combine
 
 @MainActor
-final class WorkoutViewModel: ObservableObject, Identifiable {
-    let id = UUID()
+public final class WorkoutViewModel: ObservableObject, Identifiable {
+    public let id = UUID()
     
-    let name: String
+    public let name: String
     
     @Published public var exercises: [ExerciseViewModel] = []
     @Published public var currentExerciseIndex: Int = 0
@@ -24,7 +24,7 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
     private var timerCancellable: AnyCancellable?
     private let motionTracker = SetMotionTracker.shared
     
-    init(name: String, exercises: [ExerciseViewModel] = []) {
+    public init(name: String, exercises: [ExerciseViewModel] = []) {
         self.name = name
         self.exercises = exercises
         self.workoutStartDate = Date()
@@ -33,9 +33,13 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
         startTimer()
     }
     
+    deinit {
+        timerCancellable?.cancel()
+    }
+    
     // MARK: - Exercise Management
     
-    func addExercise(_ exercise: Exercise, sets: [ExerciseSet] = []) {
+    public func addExercise(_ exercise: Exercise, sets: [ExerciseSet] = []) {
         let initialSets = sets.isEmpty ? [
             ExerciseSet(weight: 135, reps: 8),
             ExerciseSet(weight: 135, reps: 8),
@@ -47,12 +51,12 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
         bindExercises()
     }
     
-    func addExerciseViewModel(_ exerciseViewModel: ExerciseViewModel) {
+    public func addExerciseViewModel(_ exerciseViewModel: ExerciseViewModel) {
         exercises.append(exerciseViewModel)
         bindExercises()
     }
     
-    func removeExercise(at offsets: IndexSet) {
+    public func removeExercise(at offsets: IndexSet) {
         exercises.remove(atOffsets: offsets)
         if currentExerciseIndex >= exercises.count {
             currentExerciseIndex = max(0, exercises.count - 1)
@@ -60,7 +64,7 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
         bindExercises()
     }
     
-    func removeExercise(id: UUID) {
+    public func removeExercise(id: UUID) {
         exercises.removeAll { $0.id == id }
         if currentExerciseIndex >= exercises.count {
             currentExerciseIndex = max(0, exercises.count - 1)
@@ -68,12 +72,48 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
         bindExercises()
     }
     
-    func bindExercises() {
-        exerciseCancellables = exercises.map { vm in
-            vm.objectWillChange.sink { [weak self] _ in
-                self?.objectWillChange.send()
+    public func bindExercises() {
+        exerciseCancellables = exercises.map { [weak self] vm in
+            vm.objectWillChange.sink { [weak self, weak vm] _ in
+                guard let self = self else { return }
+                if let vm = vm {
+                    self.syncTimingsToStore(for: vm)
+                }
+                self.objectWillChange.send()
             }
         }
+    }
+    
+    // MARK: - Persistence & Tracking of Timings
+    
+    public func syncTimingsToStore(for targetVM: ExerciseViewModel? = nil) {
+        let vmsToSync = targetVM.map { [$0] } ?? exercises
+        for vm in vmsToSync {
+            for (index, set) in vm.sets.enumerated() {
+                if set.state == .finished,
+                   let ecc = set.eccentricDuration,
+                   let con = set.concentricDuration,
+                   ecc > 0 || con > 0 {
+                    ExerciseTimingStore.shared.record(
+                        id: set.id,
+                        exerciseName: vm.exercise.name,
+                        workoutName: self.name,
+                        setNumber: index + 1,
+                        weight: Double(set.weight) ?? 0,
+                        reps: Int(set.reps) ?? 0,
+                        eccentricDuration: ecc,
+                        concentricDuration: con,
+                        date: set.setFinished,
+                        source: SetMotionTracker.shared.selectedSource.rawValue
+                    )
+                }
+            }
+        }
+    }
+    
+    public func finishWorkout() {
+        syncTimingsToStore()
+        timerCancellable?.cancel()
     }
     
     var exerciseCountDetails: String {
@@ -154,6 +194,7 @@ final class WorkoutViewModel: ObservableObject, Identifiable {
     
     func cycleCurrentSetState() {
         activeOrCurrentExercise.cycleCurrentSetState()
+        syncTimingsToStore(for: activeOrCurrentExercise)
     }
     
     func updateTime(to date: Date = Date()) {

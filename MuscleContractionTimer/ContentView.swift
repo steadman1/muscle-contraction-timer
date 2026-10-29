@@ -7,40 +7,44 @@
 
 import SwiftUI
 
-fileprivate let legsAndBackWorkout = WorkoutViewModel(
-    name: "Legs and Back",
-    exercises: [
-        ExerciseViewModel(
-            exercise: Exercise(
-                name: "Back Squat",
-                equipmentName: "Barbell",
-                demonstrationImage: .init("squat")
-            ),
-            sets: [
-                .init(weight: 135, reps: 8),
-                .init(weight: 135, reps: 7),
-                .init(weight: 135, reps: 6)
-            ]
-        ),
-        ExerciseViewModel(
-            exercise: Exercise(
-                name: "Pull Ups",
-                equipmentName: "Pull Up Bar",
-                demonstrationImage: .init("pull_up")
-            ),
-            sets: [
-                .init(weight: 45, reps: 6),
-                .init(weight: 45, reps: 5),
-                .init(weight: 45, reps: 4)
-            ]
-        )
-    ]
-)
-
 public struct ContentView: View {
     
+    @StateObject private var workoutViewModel = ContentView.makeDefaultWorkoutViewModel()
     @StateObject private var controller = MotionSessionController()
     @StateObject private var store = MotionSetStore()
+    @State private var progressionExerciseName: String?
+    
+    private static func makeDefaultWorkoutViewModel() -> WorkoutViewModel {
+        WorkoutViewModel(
+            name: "Legs and Back",
+            exercises: [
+                ExerciseViewModel(
+                    exercise: Exercise(
+                        name: "Back Squat",
+                        equipmentName: "Barbell",
+                        demonstrationImage: .init("squat")
+                    ),
+                    sets: [
+                        ExerciseSet(weight: 135, reps: 8),
+                        ExerciseSet(weight: 135, reps: 7),
+                        ExerciseSet(weight: 135, reps: 6)
+                    ]
+                ),
+                ExerciseViewModel(
+                    exercise: Exercise(
+                        name: "Pull Ups",
+                        equipmentName: "Pull Up Bar",
+                        demonstrationImage: .init("pull_up")
+                    ),
+                    sets: [
+                        ExerciseSet(weight: 45, reps: 6),
+                        ExerciseSet(weight: 45, reps: 5),
+                        ExerciseSet(weight: 45, reps: 4)
+                    ]
+                )
+            ]
+        )
+    }
     
     public var body: some View {
         TabView {
@@ -53,17 +57,57 @@ public struct ContentView: View {
                     ScrollView(.horizontal) {
                         HStack {
                             WorkoutTemplateView(
-                                workoutViewModel: legsAndBackWorkout
+                                workoutViewModel: workoutViewModel
                             )
                         }
                         .padding(.leading, Constants.Padding.m)
                     }
                     .scrollClipDisabled()
+                    .scrollIndicators(.hidden)
+                    
+                    Spacer()
+                        .frame(height: Constants.Padding.m)
+                    
+                    Text("Strength")
+                        .font(Fonts.headline)
+                        .foregroundStyle(Color.primaryText)
+                        .padding(.leading, Constants.Padding.m)
+                    
+                    ScrollView(.horizontal) {
+                        HStack(spacing: Constants.Padding.m) {
+                            ContractionPhaseTimingProgressionView(
+                                exerciseName: "Pull Ups",
+                                phase: .eccentric,
+                                onTap: {
+                                    progressionExerciseName = "Pull Ups"
+                                }
+                            )
+                            
+                            ContractionPhaseTimingProgressionView(
+                                exerciseName: "Pull Ups",
+                                phase: .concentric,
+                                onTap: {
+                                    progressionExerciseName = "Pull Ups"
+                                }
+                            )
+                        }
+                        .padding(.horizontal, Constants.Padding.m)
+                    }
+                    .scrollClipDisabled()
+                    .scrollIndicators(.hidden)
                 }
             }
             .padding(.vertical, Constants.Padding.m)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.background)
+            .sheet(isPresented: Binding(
+                get: { progressionExerciseName != nil },
+                set: { if !$0 { progressionExerciseName = nil } }
+            )) {
+                if let exerciseName = progressionExerciseName {
+                    ExerciseProgressionView(exerciseName: exerciseName)
+                }
+            }
             .tabItem {
                 Label("Workout", systemImage: "dumbbell.fill")
             }
@@ -245,7 +289,7 @@ public struct RecorderTabView: View {
                     in: 1...100
                 )
                 .font(.subheadline.bold())
-                .onChange(of: controller.userEnteredRepCount) { _ in
+                .onChange(of: controller.userEnteredRepCount) { _, _ in
                     controller.computeTimingsForRepCount()
                 }
                 

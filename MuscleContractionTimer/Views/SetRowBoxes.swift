@@ -74,7 +74,7 @@ struct SetRowInputBox: View {
                             .lineLimit(1)
                             .multilineTextAlignment(.leading)
                             .focused($isFocused)
-                            .onReceive(Just(text)) { newValue in
+                            .onChange(of: text) { _, newValue in
                                 let filtered = newValue.filter { "0123456789".contains($0) }
                                 if filtered != newValue {
                                     text = filtered

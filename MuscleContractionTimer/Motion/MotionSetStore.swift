@@ -26,16 +26,14 @@ public final class MotionSetStore: ObservableObject {
     }()
     
     public init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
         self.directoryURL = docs.appendingPathComponent("SavedMotionSets", isDirectory: true)
         createDirectoryIfNeeded()
         loadAllSets()
     }
     
     private func createDirectoryIfNeeded() {
-        if !FileManager.default.fileExists(atPath: directoryURL.path) {
-            try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        }
+        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
     }
     
     public func loadAllSets() {

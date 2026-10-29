@@ -8,7 +8,7 @@
 import Foundation
 import simd
 
-public struct AnalyzerConfiguration: Sendable {
+public struct AnalyzerConfiguration: Sendable, Codable, Equatable, Hashable {
     public var targetSampleRateHz: Double
     public var highPassCutoffHz: Double
     public var lowPassCutoffHz: Double
@@ -16,6 +16,24 @@ public struct AnalyzerConfiguration: Sendable {
     public var crestDepartureRatio: Double
     /// Fraction of recording start/end penalized against pre/post-set handling artifacts (default 0.12 = 12%)
     public var edgeExclusionRatio: Double
+    /// Relative inflection velocity threshold (default 0.05 = 5% of peak velocity)
+    public var velocityThresholdRatio: Double
+    
+    public init(
+        targetSampleRateHz: Double,
+        highPassCutoffHz: Double,
+        lowPassCutoffHz: Double,
+        crestDepartureRatio: Double,
+        edgeExclusionRatio: Double,
+        velocityThresholdRatio: Double = 0.05
+    ) {
+        self.targetSampleRateHz = targetSampleRateHz
+        self.highPassCutoffHz = highPassCutoffHz
+        self.lowPassCutoffHz = lowPassCutoffHz
+        self.crestDepartureRatio = crestDepartureRatio
+        self.edgeExclusionRatio = edgeExclusionRatio
+        self.velocityThresholdRatio = velocityThresholdRatio
+    }
     
     public static func preset(for source: SensorSource) -> AnalyzerConfiguration {
         switch source {
@@ -25,7 +43,8 @@ public struct AnalyzerConfiguration: Sendable {
                 highPassCutoffHz: 0.10,
                 lowPassCutoffHz: 5.5,
                 crestDepartureRatio: 0.03,
-                edgeExclusionRatio: 0.12
+                edgeExclusionRatio: 0.12,
+                velocityThresholdRatio: 0.05
             )
         case .airPods:
             return AnalyzerConfiguration(
@@ -33,8 +52,78 @@ public struct AnalyzerConfiguration: Sendable {
                 highPassCutoffHz: 0.08,
                 lowPassCutoffHz: 3.8,
                 crestDepartureRatio: 0.03,
-                edgeExclusionRatio: 0.12
+                edgeExclusionRatio: 0.12,
+                velocityThresholdRatio: 0.05
             )
+        }
+    }
+    
+    /// Optimized motion configuration for Squats (Back Squat, Front Squat, Goblet Squat)
+    /// - High-pass 0.07Hz (iPhone) / 0.06Hz (AirPods): Preserves prolonged 3.5s - 4.0s eccentric descents without baseline washout
+    /// - Low-pass 4.8Hz (iPhone) / 3.5Hz (AirPods): Cuts bar contact clatter while preserving sharp reversal inflection in the hole
+    /// - Crest departure 0.028 (2.8%): Accurately pinpoints intentional knee unlock and hip descent while ignoring upright postural sway
+    /// - Edge exclusion 0.16 (16%): Tapers out rack walkout steps and rerack impacts
+    /// - Velocity threshold 0.04 (4%): Catches onset inflection smoothly without latency
+    public static func squatPreset(for source: SensorSource) -> AnalyzerConfiguration {
+        switch source {
+        case .iPhone:
+            return AnalyzerConfiguration(
+                targetSampleRateHz: 100.0,
+                highPassCutoffHz: 0.07,
+                lowPassCutoffHz: 4.8,
+                crestDepartureRatio: 0.028,
+                edgeExclusionRatio: 0.16,
+                velocityThresholdRatio: 0.04
+            )
+        case .airPods:
+            return AnalyzerConfiguration(
+                targetSampleRateHz: 50.0,
+                highPassCutoffHz: 0.06,
+                lowPassCutoffHz: 3.5,
+                crestDepartureRatio: 0.028,
+                edgeExclusionRatio: 0.16,
+                velocityThresholdRatio: 0.04
+            )
+        }
+    }
+    
+    /// Optimized motion configuration for Pull Ups & Chin Ups
+    /// - High-pass 0.06Hz (iPhone) / 0.05Hz (AirPods): Prevents baseline drift during dead hangs and slow negative descents
+    /// - Low-pass 3.8Hz (iPhone) / 3.0Hz (AirPods): Suppresses pendulum body swing harmonics in the sagittal plane
+    /// - Crest departure 0.020 (2.0%): Detects immediate lat engagement from dead hang instantly (giving highest IoU with visual rep start)
+    /// - Edge exclusion 0.18 (18%): Strongly penalizes and rejects the initial jump-to-bar and final floor-landing drop
+    /// - Velocity threshold 0.04 (4%): Cleanly bounds hanging turnaround
+    public static func pullUpPreset(for source: SensorSource) -> AnalyzerConfiguration {
+        switch source {
+        case .iPhone:
+            return AnalyzerConfiguration(
+                targetSampleRateHz: 100.0,
+                highPassCutoffHz: 0.06,
+                lowPassCutoffHz: 3.8,
+                crestDepartureRatio: 0.020,
+                edgeExclusionRatio: 0.18,
+                velocityThresholdRatio: 0.04
+            )
+        case .airPods:
+            return AnalyzerConfiguration(
+                targetSampleRateHz: 50.0,
+                highPassCutoffHz: 0.05,
+                lowPassCutoffHz: 3.0,
+                crestDepartureRatio: 0.020,
+                edgeExclusionRatio: 0.18,
+                velocityThresholdRatio: 0.04
+            )
+        }
+    }
+    
+    public static func preset(for exerciseName: String, source: SensorSource) -> AnalyzerConfiguration {
+        let lower = exerciseName.lowercased()
+        if lower.contains("squat") {
+            return squatPreset(for: source)
+        } else if lower.contains("pull") && (lower.contains("up") || lower.contains("down")) {
+            return pullUpPreset(for: source)
+        } else {
+            return preset(for: source)
         }
     }
 }
@@ -390,7 +479,7 @@ public enum OfflineCycleAnalyzer {
         // (< 3% of ROM departure and velocity < 5% of peak speed) to trim pre-rep standing stillness
         // without cutting into slow eccentric descents.
         let departFloor1 = minLeftVal + stroke1ROM * config.crestDepartureRatio
-        let velFloor = maxVel * 0.05
+        let velFloor = maxVel * config.velocityThresholdRatio
         
         var startIdx = minLeftIdx
         while startIdx < turnPeakIdx - 2 {

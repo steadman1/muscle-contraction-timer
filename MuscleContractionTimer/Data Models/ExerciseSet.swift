@@ -9,54 +9,67 @@ import Foundation
 import Combine
 import SwiftUI
 
-enum ExerciseSetState: Int {
+public enum ExerciseSetState: Int, Sendable, Equatable {
     case notStarted, started, finished
 }
 
-class ExerciseSet: ObservableObject {
-    let id = UUID()
+@MainActor
+public final class ExerciseSet: ObservableObject, Identifiable, Equatable {
+    public let id = UUID()
     
-    @Published var weight: String // not Double for simplicity with text input
-    @Published var reps: String { // not Int for simplicity with text input
+    @Published public var weight: String
+    @Published public var reps: String {
         didSet {
             if oldValue != reps, state == .finished, !recordedFrames.isEmpty {
                 recomputeTimings()
             }
         }
     }
-    @Published var state: ExerciseSetState
+    @Published public var state: ExerciseSetState
     
-    @Published var setStarted: Date
-    @Published var setFinished: Date
+    @Published public var setStarted: Date
+    @Published public var setFinished: Date
     
     // Post-hoc Muscle Contraction Timings (Seconds)
-    @Published var eccentricDuration: TimeInterval?
-    @Published var concentricDuration: TimeInterval?
-    @Published var isAnalyzingContraction: Bool = false
+    @Published public var eccentricDuration: TimeInterval?
+    @Published public var concentricDuration: TimeInterval?
+    @Published public var isAnalyzingContraction: Bool = false
     
-    private(set) var recordedFrames: [RawMotionFrame] = []
+    @Published public var configuration: AnalyzerConfiguration?
+    @Published public var phaseOrder: ExercisePhaseOrder = .eccentricFirst
+    
+    public private(set) var recordedFrames: [RawMotionFrame] = []
     private var recordedSource: SensorSource = .iPhone
     private var recordedPhaseOrder: ExercisePhaseOrder = .eccentricFirst
+    private var recordedConfiguration: AnalyzerConfiguration?
     
-    init(
-        weight: Int, // Int instead of Double also for simplicity lol
+    public init(
+        weight: Int,
         reps: Int,
-        state: ExerciseSetState = .notStarted
+        state: ExerciseSetState = .notStarted,
+        configuration: AnalyzerConfiguration? = nil,
+        phaseOrder: ExercisePhaseOrder = .eccentricFirst
     ) {
         self.weight = String(weight)
         self.reps = String(reps)
         self.state = state
         self.setStarted = Date()
         self.setFinished = Date()
+        self.configuration = configuration
+        self.phaseOrder = phaseOrder
+        self.recordedPhaseOrder = phaseOrder
+        self.recordedConfiguration = configuration
     }
     
-    fileprivate init(
+    private init(
         weight: String,
         reps: String,
         state: ExerciseSetState = .notStarted,
         eccentricDuration: TimeInterval? = nil,
         concentricDuration: TimeInterval? = nil,
-        recordedFrames: [RawMotionFrame] = []
+        recordedFrames: [RawMotionFrame] = [],
+        configuration: AnalyzerConfiguration? = nil,
+        phaseOrder: ExercisePhaseOrder = .eccentricFirst
     ) {
         self.weight = weight
         self.reps = reps
@@ -66,21 +79,26 @@ class ExerciseSet: ObservableObject {
         self.eccentricDuration = eccentricDuration
         self.concentricDuration = concentricDuration
         self.recordedFrames = recordedFrames
+        self.configuration = configuration
+        self.phaseOrder = phaseOrder
+        self.recordedPhaseOrder = phaseOrder
+        self.recordedConfiguration = configuration
     }
     
-    func copy() -> ExerciseSet {
-        return ExerciseSet(
+    public func copy() -> ExerciseSet {
+        ExerciseSet(
             weight: self.weight,
             reps: self.reps,
             state: self.state,
             eccentricDuration: self.eccentricDuration,
             concentricDuration: self.concentricDuration,
-            recordedFrames: self.recordedFrames
+            recordedFrames: self.recordedFrames,
+            configuration: self.configuration,
+            phaseOrder: self.phaseOrder
         )
     }
 
-    @MainActor
-    func cycleState() {
+    public func cycleState() {
         switch self.state {
         case .notStarted:
             self.setStarted = Date()
@@ -103,22 +121,31 @@ class ExerciseSet: ObservableObject {
         }
     }
     
-    func storeAndAnalyze(
+    public func storeAndAnalyze(
         frames: [RawMotionFrame],
         source: SensorSource,
-        phaseOrder: ExercisePhaseOrder
+        configuration: AnalyzerConfiguration? = nil,
+        phaseOrder: ExercisePhaseOrder? = nil
     ) {
         self.recordedFrames = frames
         self.recordedSource = source
-        self.recordedPhaseOrder = phaseOrder
+        if let config = configuration {
+            self.recordedConfiguration = config
+            self.configuration = config
+        }
+        if let order = phaseOrder {
+            self.recordedPhaseOrder = order
+            self.phaseOrder = order
+        }
         recomputeTimings()
     }
     
-    func recomputeTimings() {
+    public func recomputeTimings() {
         let targetReps = max(1, Int(reps) ?? 1)
         let framesSnapshot = recordedFrames
         let sourceSnapshot = recordedSource
         let orderSnapshot = recordedPhaseOrder
+        let configSnapshot = recordedConfiguration ?? configuration ?? AnalyzerConfiguration.preset(for: sourceSnapshot)
         
         guard framesSnapshot.count > 20 else {
             self.eccentricDuration = 0
@@ -134,6 +161,7 @@ class ExerciseSet: ObservableObject {
                 frames: framesSnapshot,
                 targetRepCount: targetReps,
                 source: sourceSnapshot,
+                configuration: configSnapshot,
                 phaseOrder: orderSnapshot
             )
             let avgEcc = await result.averageEccentricDuration
@@ -146,10 +174,8 @@ class ExerciseSet: ObservableObject {
             }
         }
     }
-}
-
-extension ExerciseSet: Identifiable {
-    static func == (lhs: borrowing ExerciseSet, rhs: borrowing ExerciseSet) -> Bool {
+    
+    public static func == (lhs: ExerciseSet, rhs: ExerciseSet) -> Bool {
         lhs.id == rhs.id
     }
 }

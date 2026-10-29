@@ -12,6 +12,7 @@ fileprivate let bottomBarHeight: CGFloat = 64
 struct ActiveWorkoutView: View {
     
     @StateObject var workoutViewModel: WorkoutViewModel
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         ScrollView {
@@ -28,7 +29,11 @@ struct ActiveWorkoutView: View {
         .safeAreaInset(edge: .top) {
             HeaderView(
                 timeString: workoutViewModel.workoutDurationString,
-                workoutName: workoutViewModel.name
+                workoutName: workoutViewModel.name,
+                onFinish: {
+                    workoutViewModel.finishWorkout()
+                    dismiss()
+                }
             )
         }
         .safeAreaInset(edge: .bottom) {
@@ -50,6 +55,7 @@ struct ActiveWorkoutView: View {
 struct HeaderView: View {
     var timeString: String
     let workoutName: String
+    var onFinish: (() -> Void)? = nil
     
     var body: some View {
         HStack {
@@ -66,7 +72,11 @@ struct HeaderView: View {
             Spacer()
             
             HStack {
-                Button(action: {}) {
+                Button(action: {
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                    onFinish?()
+                }) {
                     Text("Finish")
                         .font(Fonts.headline)
                         .foregroundStyle(Color.primaryActive)
@@ -84,8 +94,7 @@ struct HeaderView: View {
                     Image(systemName: "ellipsis")
                         .font(Fonts.headline)
                         .foregroundStyle(Color.primaryText)
-                        .frame(width: 0, height: 0) // restrict size so that the non-square image wont cause weird ghost sizing after the clipShape is applied
-                        .padding(Constants.Padding.m + 2) // sloppy but it makes the height match the finish button to its left
+                        .frame(width: 36, height: 36)
                 }
                 .clipShape(Circle())
                 .glassEffect(.regular, in: .circle)

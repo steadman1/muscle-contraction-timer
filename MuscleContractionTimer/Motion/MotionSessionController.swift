@@ -199,15 +199,15 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
         let configSnapshot = config
         let groundTruthSnapshot = manualGroundTruthReps
         
-        Task.detached(priority: .userInitiated) {
-            let baseResult = OfflineCycleAnalyzer.analyze(
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let baseResult = await OfflineCycleAnalyzer.analyze(
                 frames: framesSnapshot,
                 targetRepCount: targetReps,
                 source: sourceSnapshot,
                 configuration: configSnapshot,
                 phaseOrder: orderSnapshot
             )
-            let enrichedResult = SessionAnalysisResult(
+            let enrichedResult = await SessionAnalysisResult(
                 source: baseResult.source,
                 phaseOrder: orderSnapshot,
                 principalAxis: baseResult.principalAxis,
@@ -217,8 +217,8 @@ public final class MotionSessionController: NSObject, ObservableObject, CMHeadph
                 groundTruthReps: groundTruthSnapshot
             )
             await MainActor.run {
-                self.analysisResult = enrichedResult
-                self.state = .completed
+                self?.analysisResult = enrichedResult
+                self?.state = .completed
             }
         }
     }

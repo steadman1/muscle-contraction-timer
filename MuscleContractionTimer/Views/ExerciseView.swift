@@ -10,6 +10,8 @@ import SwiftUI
 struct ExerciseView: View {
     @ObservedObject var viewModel: ExerciseViewModel
     @ObservedObject private var motionTracker = SetMotionTracker.shared
+    @State private var showingProgression = false
+    @State private var showingAlgorithmConfig = false
     
     var body: some View {
         VStack(spacing: Constants.Padding.m) {
@@ -46,13 +48,22 @@ struct ExerciseView: View {
             .shadow(color: Color.shadow, radius: 4, y: 4)
             
             HStack {
-                HStack {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                    Text("Progression")
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                    showingProgression = true
+                } label: {
+                    HStack {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                        Text("Progression")
+                    }
+                    .font(Fonts.headline)
+                    .foregroundStyle(Color.secondaryText)
+                    .frame(maxWidth: .infinity)
                 }
-                .font(Fonts.headline)
-                .foregroundStyle(Color.secondaryText)
-                .frame(maxWidth: .infinity)
+                .sheet(isPresented: $showingProgression) {
+                    ExerciseProgressionView(exerciseName: viewModel.exercise.name)
+                }
                 
                 RoundedRectangle(cornerRadius: Constants.Radius.max)
                     .frame(width: Constants.strokeWidth, height: 24)
@@ -85,6 +96,13 @@ struct ExerciseView: View {
         .compositingGroup()
         .shadow(color: Color.shadow, radius: 12)
         .shadow(color: Color.shadow, radius: 4)
+        .sheet(isPresented: $showingAlgorithmConfig) {
+            ExerciseMotionConfigSheet(viewModel: viewModel)
+        }
+        .onAppear {
+            motionTracker.phaseOrder = viewModel.exercise.phaseOrder
+            viewModel.propagateExerciseConfigurationToSets()
+        }
     }
     
     var exerciseInfoTitle: some View {
@@ -151,12 +169,27 @@ struct ExerciseView: View {
             }
             
             Section("Contraction Phase Order") {
-                Picker("Phase Order", selection: $motionTracker.phaseOrder) {
+                Picker("Phase Order", selection: Binding(
+                    get: { viewModel.exercise.phaseOrder },
+                    set: { newOrder in
+                        viewModel.exercise.phaseOrder = newOrder
+                        motionTracker.phaseOrder = newOrder
+                        viewModel.propagateExerciseConfigurationToSets()
+                    }
+                )) {
                     ForEach(ExercisePhaseOrder.allCases) { order in
                         Text(order.rawValue).tag(order)
                     }
                 }
                 .pickerStyle(.inline)
+            }
+            
+            Section("Algorithm Optimization") {
+                Button {
+                    showingAlgorithmConfig = true
+                } label: {
+                    Label("Motion Algorithm Config", systemImage: "slider.horizontal.3")
+                }
             }
         } label: {
             exerciseInfoTitleButton(systemName: "ellipsis")

@@ -27,8 +27,7 @@ struct WorkoutTemplateView: View {
                     Image(systemName: "ellipsis")
                         .font(Fonts.headline)
                         .foregroundStyle(Color.primaryText)
-                        .frame(width: 0, height: 0) // restrict size so that the non-square image wont cause weird ghost sizing after the clipShape is applied
-                        .padding(Constants.Padding.m)
+                        .frame(width: 32, height: 32)
                 }
                 .background(Color.background)
                 .clipShape(Circle())

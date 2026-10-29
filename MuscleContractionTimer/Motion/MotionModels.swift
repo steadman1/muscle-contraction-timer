@@ -90,6 +90,20 @@ public struct RawMotionFrame: Codable, Hashable, Sendable {
         self.rotation = RotationMatrix3x3(from: motion.attitude.rotationMatrix)
     }
     
+    public init(
+        timestamp: TimeInterval,
+        ax: Double,
+        ay: Double,
+        az: Double,
+        rotation: RotationMatrix3x3 = RotationMatrix3x3(simdMatrix: matrix_identity_double3x3)
+    ) {
+        self.timestamp = timestamp
+        self.ax = ax
+        self.ay = ay
+        self.az = az
+        self.rotation = rotation
+    }
+    
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.timestamp = try container.decode(TimeInterval.self, forKey: .timestamp)

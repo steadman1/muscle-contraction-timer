@@ -58,6 +58,7 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         
         activeSet = set
         activeSetID = set.id
+        self.phaseOrder = set.phaseOrder
         
         var sourceToUse: SensorSource = selectedSource
         
@@ -98,7 +99,8 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         
         let framesSnapshot = recordedFrames
         let sourceSnapshot = currentTrackingSource
-        let orderSnapshot = phaseOrder
+        let orderSnapshot = set.phaseOrder
+        let configSnapshot = set.configuration ?? AnalyzerConfiguration.preset(for: sourceSnapshot)
         
         activeSet = nil
         activeSetID = nil
@@ -107,6 +109,7 @@ public final class SetMotionTracker: NSObject, ObservableObject, CMHeadphoneMoti
         set.storeAndAnalyze(
             frames: framesSnapshot,
             source: sourceSnapshot,
+            configuration: configSnapshot,
             phaseOrder: orderSnapshot
         )
     }

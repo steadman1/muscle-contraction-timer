@@ -9,6 +9,7 @@ import SwiftUI
 
 public struct SavedSetsTabView: View {
     @ObservedObject var store: MotionSetStore
+    @ObservedObject private var timingStore = ExerciseTimingStore.shared
     @State private var batchSummary: (eccMAE: Double, conMAE: Double, turnMAE: Double, iou: Double)?
     @State private var isRunningBatch = false
     
@@ -19,6 +20,43 @@ public struct SavedSetsTabView: View {
     public var body: some View {
         NavigationStack {
             List {
+                Section("Tracked Contraction Timings by Exercise") {
+                    let exercises = timingStore.distinctExerciseNames()
+                    if exercises.isEmpty {
+                        Text("No contraction timings recorded yet. Complete workout sets with tracking to view timing history across workouts.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(exercises, id: \.self) { exerciseName in
+                            NavigationLink {
+                                ExerciseProgressionView(exerciseName: exerciseName)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text(exerciseName)
+                                            .font(.headline)
+                                        Spacer()
+                                        if let avgEcc = timingStore.averageEccentric(for: exerciseName),
+                                           let avgCon = timingStore.averageConcentric(for: exerciseName) {
+                                            Text(String(format: "%.1fs ecc / %.1fs con", avgEcc, avgCon))
+                                                .font(.caption.bold())
+                                                .foregroundColor(.orange)
+                                        }
+                                    }
+                                    
+                                    let groups = timingStore.workoutGroups(for: exerciseName)
+                                    let count = timingStore.records(for: exerciseName).count
+                                    Text("\(count) sets across \(groups.count) workout\(groups.count == 1 ? "" : "s")")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
+                }
+                
                 if !store.savedSets.isEmpty {
                     Section("Global Algorithm Benchmark") {
                         VStack(alignment: .leading, spacing: 10) {
@@ -140,13 +178,13 @@ public struct SavedSetsTabView: View {
             var ious: [Double] = []
             
             for set in setsSnapshot {
-                let base = OfflineCycleAnalyzer.analyze(
+                let base = await OfflineCycleAnalyzer.analyze(
                     frames: set.frames,
                     targetRepCount: set.targetRepCount,
                     source: set.source,
                     phaseOrder: set.phaseOrder
                 )
-                let enriched = SessionAnalysisResult(
+                let enriched = await SessionAnalysisResult(
                     source: set.source,
                     phaseOrder: set.phaseOrder,
                     principalAxis: base.principalAxis,
@@ -155,10 +193,10 @@ public struct SavedSetsTabView: View {
                     cycles: base.cycles,
                     groundTruthReps: set.groundTruthReps
                 )
-                if let e = enriched.meanAbsoluteEccentricError { eccErrors.append(e) }
-                if let c = enriched.meanAbsoluteConcentricError { conErrors.append(c) }
-                if let t = enriched.meanAbsoluteTurnaroundError { turnErrors.append(t) }
-                if let u = enriched.meanIoU { ious.append(u) }
+                if let e = await enriched.meanAbsoluteEccentricError { eccErrors.append(e) }
+                if let c = await enriched.meanAbsoluteConcentricError { conErrors.append(c) }
+                if let t = await enriched.meanAbsoluteTurnaroundError { turnErrors.append(t) }
+                if let u = await enriched.meanIoU { ious.append(u) }
             }
             
             let avgEcc = eccErrors.isEmpty ? 0 : eccErrors.reduce(0, +) / Double(eccErrors.count)
@@ -192,11 +230,11 @@ public struct SavedSetDetailView: View {
         self.store = store
         self._phaseOrder = State(initialValue: set.phaseOrder)
         self._targetRepCount = State(initialValue: set.targetRepCount)
-        self._config = State(initialValue: .preset(for: set.source))
+        self._config = State(initialValue: .preset(for: set.title, source: set.source))
     }
     
     public var body: some View {
-        ScrollView {
+        ScrollView(.vertical) {
             VStack(spacing: 16) {
                 datasetControlsCard
                 parameterSandboxCard
@@ -208,7 +246,7 @@ public struct SavedSetDetailView: View {
                     AnalysisReportView(result: result)
                 }
             }
-            .padding()
+            .padding(8)
         }
         .navigationTitle(set.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -234,14 +272,14 @@ public struct SavedSetDetailView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .onChange(of: phaseOrder) { _ in
+            .onChange(of: phaseOrder) { _, _ in
                 persistMetadataUpdate()
                 runAnalysis()
             }
             
             Stepper("Target Reps: \(targetRepCount)", value: $targetRepCount, in: 1...100)
                 .font(.subheadline.bold())
-                .onChange(of: targetRepCount) { _ in
+                .onChange(of: targetRepCount) { _, _ in
                     persistMetadataUpdate()
                     runAnalysis()
                 }
@@ -302,12 +340,32 @@ public struct SavedSetDetailView: View {
                     }
                 }
                 
-                Button("Reset to \(set.source.rawValue) Preset") {
-                    config = .preset(for: set.source)
-                    runAnalysis()
+                HStack(spacing: 8) {
+                    Button("Squat Preset") {
+                        config = .squatPreset(for: set.source)
+                        phaseOrder = .eccentricFirst
+                        persistMetadataUpdate()
+                        runAnalysis()
+                    }
+                    .font(.caption2.bold())
+                    .buttonStyle(.bordered)
+                    
+                    Button("Pull-Up Preset") {
+                        config = .pullUpPreset(for: set.source)
+                        phaseOrder = .concentricFirst
+                        persistMetadataUpdate()
+                        runAnalysis()
+                    }
+                    .font(.caption2.bold())
+                    .buttonStyle(.bordered)
+                    
+                    Button("Default") {
+                        config = .preset(for: set.source)
+                        runAnalysis()
+                    }
+                    .font(.caption2.bold())
+                    .buttonStyle(.bordered)
                 }
-                .font(.caption.bold())
-                .buttonStyle(.bordered)
             }
             .padding(.top, 8)
             .font(.caption)
@@ -334,14 +392,14 @@ public struct SavedSetDetailView: View {
         let configSnapshot = config
         
         Task.detached(priority: .userInitiated) {
-            let base = OfflineCycleAnalyzer.analyze(
+            let base = await OfflineCycleAnalyzer.analyze(
                 frames: framesSnapshot,
                 targetRepCount: repsSnapshot,
                 source: sourceSnapshot,
                 configuration: configSnapshot,
                 phaseOrder: orderSnapshot
             )
-            let enriched = SessionAnalysisResult(
+            let enriched = await SessionAnalysisResult(
                 source: sourceSnapshot,
                 phaseOrder: orderSnapshot,
                 principalAxis: base.principalAxis,

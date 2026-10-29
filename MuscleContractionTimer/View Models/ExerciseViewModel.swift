@@ -8,27 +8,50 @@
 import Foundation
 import Combine
 
-class ExerciseViewModel: ObservableObject, Identifiable {
+@MainActor
+public final class ExerciseViewModel: ObservableObject, Identifiable {
     
-    var id: UUID { exercise.id }
+    public var id: UUID { exercise.id }
     
-    @Published var exercise: Exercise
-    @Published var sets: [ExerciseSet]
-    @Published var currentSet: Int?
+    @Published public var exercise: Exercise {
+        didSet {
+            propagateExerciseConfigurationToSets()
+        }
+    }
+    @Published public var sets: [ExerciseSet]
+    @Published public var currentSet: Int?
     
     private var setCancellables: [AnyCancellable] = []
     
-    init(exercise: Exercise, sets: [ExerciseSet]) {
+    public init(exercise: Exercise, sets: [ExerciseSet]) {
         self.exercise = exercise
         self.sets = sets
         self.currentSet = sets.count > 0 ? 0 : nil
+        propagateExerciseConfigurationToSets()
         bindSets()
     }
     
+    public func propagateExerciseConfigurationToSets() {
+        let source = SetMotionTracker.shared.selectedSource
+        let config = exercise.configuration(for: source)
+        for set in sets {
+            set.phaseOrder = exercise.phaseOrder
+            set.configuration = config
+        }
+    }
+    
     func addSet() {
-        sets.append(
-            sets.last?.copy() ?? .init(weight: 0, reps: 0)
+        let source = SetMotionTracker.shared.selectedSource
+        let config = exercise.configuration(for: source)
+        let newSet = sets.last?.copy() ?? ExerciseSet(
+            weight: 0,
+            reps: 0,
+            configuration: config,
+            phaseOrder: exercise.phaseOrder
         )
+        newSet.configuration = config
+        newSet.phaseOrder = exercise.phaseOrder
+        sets.append(newSet)
         bindSets()
     }
     
